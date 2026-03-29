@@ -36,7 +36,7 @@
                 <div className="bg-black/50 p-4 rounded-xl border border-red-500/20 overflow-x-auto mb-8 custom-scrollbar">
                   <p className="text-red-300 font-bold mb-2">{this.state.error?.toString()}</p>
                 </div>
-                <button onClick={() => window.location.reload()} className="bg-red-600/20 hover:bg-red-600/40 text-red-300 border border-red-500/50 px-6 py-3 rounded-xl font-bold w-full">REBOOT SYSTEM</button>
+                <button onClick={() => window.location.reload()} className="bg-red-600/20 hover:bg-red-600/40 text-red-300 border border-red-500/50 px-6 py-3 rounded-xl font-bold w-full transition-colors">REBOOT SYSTEM</button>
               </div>
             </div>
           );
@@ -162,7 +162,6 @@
       );
     }
 
-    // MODAL API KEY (DENGAN TAUTAN PINTAS KE GOOGLE AI STUDIO)
     function ApiKeyModal({ isOpen, onClose }) {
       const [key, setKey] = useState(safeStorage.get('nexus_api_key'));
       if (!isOpen) return null;
@@ -171,12 +170,7 @@
           <div className="bg-[#050a14] border border-blue-500/20 rounded-3xl p-8 w-full max-w-lg shadow-2xl relative">
             <h3 className="text-2xl font-bold text-white mb-2 flex items-center"><Icons.Settings className="w-6 h-6 mr-3 text-blue-400" /> API Settings</h3>
             <p className="text-sm text-slate-400 mb-4">Masukkan Gemini API Key untuk membuka kunci model (Disimpan 100% lokal).</p>
-            
-            {/* TAUTAN PINTAS API KEY */}
-            <a href="https://aistudio.google.com/app/apikey" target="_blank" className="inline-flex items-center text-blue-400 hover:text-blue-300 hover:underline text-sm font-semibold mb-6 bg-blue-500/10 px-4 py-2 rounded-lg border border-blue-500/20 transition-all">
-               <Icons.ExternalLink className="w-4 h-4 mr-2"/> Dapatkan API Key Resmi di Google AI Studio
-            </a>
-
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" className="inline-flex items-center text-blue-400 hover:text-blue-300 hover:underline text-sm font-semibold mb-6 bg-blue-500/10 px-4 py-2 rounded-lg border border-blue-500/20 transition-all"><Icons.ExternalLink className="w-4 h-4 mr-2"/> Dapatkan API Key Resmi di Google AI Studio</a>
             <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="AIzaSy..." className="w-full h-14 bg-black/50 border border-white/10 rounded-2xl px-5 text-white mb-8 focus:border-blue-500 outline-none" />
             <div className="flex justify-end space-x-4"><button onClick={onClose} className="px-6 py-3 text-slate-400 hover:text-white font-bold transition-colors">Tutup</button><button onClick={() => { safeStorage.set('nexus_api_key', key.trim()); onClose(); }} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-2xl font-bold transition-all">Simpan Kredensial</button></div>
           </div>
@@ -282,7 +276,7 @@
       );
     }
 
-    // --- MODUL 4: DOCUMENT SCANNER (DENGAN KEYWORD SUGGESTION OTOMATIS) ---
+    // --- MODUL 4: DOCUMENT SCANNER (DENGAN MODE PROFESOR PENGUJI) ---
     function DocumentScannerModule({ onError, onOpenSettings }) {
       const [fileState, setFileState] = useState(null); const [extractedText, setExtractedText] = useState([]); 
       const [searchQuery, setSearchQuery] = useState(''); const [aiAnswer, setAiAnswer] = useState(''); 
@@ -307,19 +301,47 @@
           else if (ext === 'docx') { const res = await (await loadMammothJs()).extractRawText({arrayBuffer: await file.arrayBuffer()}); textRaw = res.value; const chunks = textRaw.match(/.{1,2000}/g)||[]; chunks.forEach((c,i)=>parsed.push({page:i+1, text:c})); }
           else throw new Error("Gunakan format PDF/DOCX.");
           setExtractedText(parsed); setFileState('loaded'); onError("Sukses diekstrak.", "success");
-          
-          // Trigger Auto-Mining
           if(textRaw) generateKeywords(textRaw);
         } catch(err) { onError(err.message, "error"); setFileState(null); } e.target.value='';
       };
 
       const runSearch = async (queryParam) => {
         const finalQuery = typeof queryParam === 'string' ? queryParam : searchQuery;
-        if(typeof queryParam === 'string') setSearchQuery(queryParam); // Update input box if clicked from pill
+        if(typeof queryParam === 'string') setSearchQuery(queryParam); 
         if(!finalQuery.trim()) return; 
-        
         setLoading(true); setAiAnswer('');
         try { const ctx = extractedText.slice(0, 15).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); setAiAnswer((await executeAIEngine(finalQuery, `Jawab MURNI berdasarkan dokumen. Beri referensi (Hal X).`, ctx)).text); }
+        catch(err) { (err.status===401||err.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : setAiAnswer(err.message); } finally { setLoading(false); }
+      };
+
+      // --- ALGORITMA BARU: MODE PROFESOR PENGUJI ---
+      const runExaminerMode = async () => {
+        if(extractedText.length === 0) return;
+        setLoading(true); setAiAnswer('');
+        try { 
+          const ctx = extractedText.slice(0, 15).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); 
+          const sys = `Anda adalah Profesor Penguji Sidang Akademik Senior.
+TUGAS MUTLAK (DILARANG MENGGUNAKAN GAYA BAHASA AI ATAU BASA-BASI):
+Berdasarkan dokumen yang diberikan, lakukan pembedahan analitis dengan format Markdown berikut:
+
+### 1. Evaluasi Komprehensif Naskah
+- **Kelebihan Substansi:** (Analisis tajam mengenai keunggulan metodologi, data, atau argumen di dalam dokumen)
+- **Kelemahan & Celah Riset (Research Gap):** (Kritik tajam mengenai asumsi yang lemah, bias, kekurangan bukti empiris, atau kesalahan logika di dalam dokumen)
+
+### 2. Simulasi Pertanyaan Sidang & Pertahanan
+(Buat 3 pertanyaan tingkat tinggi (HOTS) yang biasa diajukan penguji untuk menyerang naskah ini, disertai jawaban pertahanan akademis yang paling logis berdasarkan dokumen atau literatur yang relevan)
+
+- **Pertanyaan Penguji 1:** [Pertanyaan tajam menyasar kelemahan/asumsi]
+- **Pertahanan Akademis:** [Jawaban taktis, logis, dan berbasis literatur]
+
+- **Pertanyaan Penguji 2:** [Pertanyaan tajam terkait metodologi/implikasi]
+- **Pertahanan Akademis:** [Jawaban defensif yang terstruktur]
+
+- **Pertanyaan Penguji 3:** [Pertanyaan validasi data/kesimpulan]
+- **Pertahanan Akademis:** [Jawaban konklusif]`;
+          
+          setAiAnswer((await executeAIEngine("Lakukan Uji Kritis Akademik pada dokumen ini.", sys, ctx)).text); 
+        }
         catch(err) { (err.status===401||err.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : setAiAnswer(err.message); } finally { setLoading(false); }
       };
 
@@ -335,7 +357,6 @@
                    <button onClick={()=>{setFileState(null);setAiAnswer('');setSuggestions([]);setSearchQuery('');}} className="p-3 bg-red-500/10 text-red-400 rounded-full hover:bg-red-500/20 transition-colors"><Icons.Trash className="w-5 h-5"/></button>
                 </div>
                 
-                {/* AI HOT TOPICS SUGGESTIONS */}
                 <div className="mb-4">
                   <span className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-2">{isMining ? 'AI Sedang Menambang Topik...' : (suggestions.length > 0 ? 'Topik Krusial Terdeteksi:' : '')}</span>
                   <div className="flex flex-wrap gap-2">
@@ -349,7 +370,14 @@
 
                 <form onSubmit={runSearch} className="flex flex-col gap-4">
                   <input type="text" value={searchQuery} onChange={(e)=>setSearchQuery(e.target.value)} placeholder="Tanya AI tentang isi dokumen ini secara manual..." className="w-full h-[64px] bg-[#050a14]/80 border border-white/10 rounded-[2rem] px-6 text-white text-lg outline-none focus:border-blue-500" />
-                  <button type="submit" disabled={!searchQuery||loading} className="bg-blue-600 hover:bg-blue-500 h-[64px] rounded-[2rem] font-bold text-white transition-colors">Tanya AI</button>
+                  
+                  {/* UPDATE: GRID TOMBOL DENGAN MODE PENGUJI */}
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    <button type="submit" disabled={!searchQuery||loading} className="flex-1 bg-blue-600 hover:bg-blue-500 h-[64px] rounded-[2rem] font-bold text-white transition-colors disabled:opacity-50">Tanya AI</button>
+                    <button type="button" onClick={runExaminerMode} disabled={loading} className="flex-1 bg-red-900/20 hover:bg-red-900/40 border border-red-500/30 h-[64px] rounded-[2rem] font-bold text-red-300 transition-colors disabled:opacity-50 flex items-center justify-center">
+                       <Icons.Target className="w-5 h-5 mr-2" /> Uji Kritis (Mode Penguji)
+                    </button>
+                  </div>
                 </form>
               </div>
               {aiAnswer && (<div className="bg-[#0a1526]/80 p-8 rounded-[3rem] border border-blue-400/20 max-h-[70vh] overflow-y-auto custom-scrollbar"><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiAnswer)}}/></div>)}
@@ -427,7 +455,6 @@
           </div>
 
           <main className="w-full max-w-5xl mx-auto px-4 pb-24 flex-1 flex flex-col z-10 relative">
-            {/* Menggunakan teknik CSS 'hidden' agar State (file terunggah, teks) tidak hilang saat pindah tab */}
             <div className={activeTab === 'ai' ? 'w-full block animate-in fade-in' : 'hidden'}><AIResearcherModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} /></div>
             <div className={activeTab === 'journal' ? 'w-full block animate-in fade-in' : 'hidden'}><JournalHunterModule onError={triggerToast} /></div>
             <div className={activeTab === 'spss' ? 'w-full block animate-in fade-in' : 'hidden'}><DataAnalyzerModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} /></div>
