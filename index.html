@@ -32,10 +32,9 @@
           return (
             <div className="min-h-screen bg-[#020617] flex flex-col items-center justify-center p-8 text-slate-200 font-mono">
               <div className="bg-red-900/20 border border-red-500/30 p-8 rounded-3xl max-w-2xl w-full shadow-2xl">
-                <h1 className="text-2xl font-bold text-red-400 mb-4 uppercase">Sistem Panic (Crash)</h1>
+                <h1 className="text-2xl font-bold text-red-400 mb-4 uppercase">Sistem Panic</h1>
                 <div className="bg-black/50 p-4 rounded-xl border border-red-500/20 overflow-x-auto mb-8 custom-scrollbar">
                   <p className="text-red-300 font-bold mb-2">{this.state.error?.toString()}</p>
-                  <pre className="text-[10px] text-slate-500">{this.state.errorInfo?.componentStack}</pre>
                 </div>
                 <button onClick={() => window.location.reload()} className="bg-red-600/20 hover:bg-red-600/40 text-red-300 border border-red-500/50 px-6 py-3 rounded-xl font-bold w-full">REBOOT SYSTEM</button>
               </div>
@@ -88,7 +87,6 @@
       return { n, mean: mean.toFixed(3), median: median.toFixed(3), min: sorted[0], max: sorted[n - 1], variance: variance.toFixed(3), stdDev: Math.sqrt(variance).toFixed(3) };
     };
 
-    // CSV PARSER (Dynamic Delimiter Support: , or ; or \t)
     const parseCSV = (text) => {
       const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
       if (lines.length < 2) return null;
@@ -113,7 +111,7 @@
     const stripMarkdown = (md) => md ? md.replace(/#{1,6}\s+/g, '').replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/`{1,3}(.*?)`{1,3}/g, '$1').replace(/\n\s*\n/g, '\n\n') : '';
     const copyToClipboard = (text, onSuccess) => { const t = document.createElement("textarea"); t.value = stripMarkdown(text); t.style.position = "fixed"; t.style.left = "-9999px"; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); if (onSuccess) onSuccess(); } catch (err) {} document.body.removeChild(t); };
 
-    // --- AI ENGINE (30k Payload) ---
+    // --- AI ENGINE ---
     const executeAIEngine = async (prompt, systemPrompt, customContext = "") => {
       const localKey = safeStorage.get('nexus_api_key');
       const modelsToTry = localKey.trim() === "" ? [ { name: "gemini-2.5-flash-preview-09-2025", useSearch: true } ] : [ { name: "gemini-2.5-flash", useSearch: true }, { name: "gemini-1.5-flash", useSearch: false } ];
@@ -164,16 +162,23 @@
       );
     }
 
+    // MODAL API KEY (DENGAN TAUTAN PINTAS KE GOOGLE AI STUDIO)
     function ApiKeyModal({ isOpen, onClose }) {
       const [key, setKey] = useState(safeStorage.get('nexus_api_key'));
       if (!isOpen) return null;
       return (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
-          <div className="bg-[#050a14] border border-blue-500/20 rounded-3xl p-8 w-full max-w-lg shadow-2xl">
+          <div className="bg-[#050a14] border border-blue-500/20 rounded-3xl p-8 w-full max-w-lg shadow-2xl relative">
             <h3 className="text-2xl font-bold text-white mb-2 flex items-center"><Icons.Settings className="w-6 h-6 mr-3 text-blue-400" /> API Settings</h3>
-            <p className="text-sm text-slate-400 mb-6">Masukkan Gemini API Key untuk membuka kunci model (Disimpan 100% lokal).</p>
-            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="AIzaSy..." className="w-full h-14 bg-black/50 border border-white/10 rounded-2xl px-5 text-white mb-8" />
-            <div className="flex justify-end space-x-4"><button onClick={onClose} className="px-6 py-3 text-slate-400 hover:text-white font-bold">Tutup</button><button onClick={() => { safeStorage.set('nexus_api_key', key.trim()); onClose(); }} className="bg-blue-600 text-white px-8 py-3 rounded-2xl font-bold">Simpan</button></div>
+            <p className="text-sm text-slate-400 mb-4">Masukkan Gemini API Key untuk membuka kunci model (Disimpan 100% lokal).</p>
+            
+            {/* TAUTAN PINTAS API KEY */}
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" className="inline-flex items-center text-blue-400 hover:text-blue-300 hover:underline text-sm font-semibold mb-6 bg-blue-500/10 px-4 py-2 rounded-lg border border-blue-500/20 transition-all">
+               <Icons.ExternalLink className="w-4 h-4 mr-2"/> Dapatkan API Key Resmi di Google AI Studio
+            </a>
+
+            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="AIzaSy..." className="w-full h-14 bg-black/50 border border-white/10 rounded-2xl px-5 text-white mb-8 focus:border-blue-500 outline-none" />
+            <div className="flex justify-end space-x-4"><button onClick={onClose} className="px-6 py-3 text-slate-400 hover:text-white font-bold transition-colors">Tutup</button><button onClick={() => { safeStorage.set('nexus_api_key', key.trim()); onClose(); }} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-2xl font-bold transition-all">Simpan Kredensial</button></div>
           </div>
         </div>
       );
@@ -229,7 +234,7 @@
       return (
         <div className="w-full">
           <div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-6 mb-12"><form onSubmit={searchJournals} className="flex flex-col lg:flex-row gap-5 lg:items-end w-full"><div className="flex-1 relative"><label className="block text-[11px] font-bold text-slate-500 uppercase mb-3">Kata Kunci Literasi</label><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik..." className="w-full h-[64px] bg-[#050a14]/80 border border-white/10 rounded-[1.5rem] px-5 text-white" /></div><div className="w-full lg:w-72"><CustomSelect label="Filter Tahun" options={[{value:'all', label:'Semua'}, {value:'2024', label:'2024+'}, {value:'2022', label:'2022+'}]} value={year} onChange={setYear} allowManual={true} /></div><div className="w-full lg:w-auto"><button type="submit" disabled={loading || !query.trim()} className="w-full h-[64px] bg-blue-600 text-white px-10 rounded-[1.5rem] font-bold disabled:opacity-50">{loading ? 'Mencari...' : 'Cari'}</button></div></form></div>
-          {!loading && results.length > 0 && (<div className="space-y-4">{results.map((paper, idx) => (<div key={idx} className="bg-[#0a1526]/80 border border-blue-500/20 rounded-[2rem] p-6 flex flex-col sm:flex-row justify-between"><div className="flex-1"><h4 className="text-xl font-semibold text-white">{paper.title || "Unknown"}</h4><div className="mt-4 flex gap-3"><span className="px-3 py-1 bg-blue-500/10 rounded-lg text-xs font-bold text-blue-300">{paper.publication_year}</span><span className="text-xs font-bold text-amber-300 bg-amber-500/10 px-3 py-1 rounded-lg">Sitasi: {paper.cited_by_count || 0}</span></div></div>{paper.doi && (<a href={paper.doi} target="_blank" className="w-12 h-12 bg-blue-500/10 border border-blue-500/20 text-blue-400 rounded-2xl flex justify-center items-center"><Icons.ExternalLink className="w-5 h-5" /></a>)}</div>))}</div>)}
+          {!loading && results.length > 0 && (<div className="space-y-4">{results.map((paper, idx) => (<div key={idx} className="bg-[#0a1526]/80 border border-blue-500/20 rounded-[2rem] p-6 flex flex-col sm:flex-row justify-between"><div className="flex-1"><h4 className="text-xl font-semibold text-white">{paper.title || "Unknown"}</h4><div className="mt-4 flex gap-3"><span className="px-3 py-1 bg-blue-500/10 rounded-lg text-xs font-bold text-blue-300">{paper.publication_year}</span><span className="text-xs font-bold text-amber-300 bg-amber-500/10 px-3 py-1 rounded-lg">Sitasi: {paper.cited_by_count || 0}</span></div></div>{paper.doi && (<a href={paper.doi} target="_blank" className="w-12 h-12 bg-blue-500/10 border border-blue-500/20 text-blue-400 rounded-2xl flex justify-center items-center hover:bg-blue-600 hover:text-white transition-colors"><Icons.ExternalLink className="w-5 h-5" /></a>)}</div>))}</div>)}
         </div>
       );
     }
@@ -241,7 +246,6 @@
       const processData = (csvText) => {
         try {
           const parsed = parseCSV(csvText); if (!parsed) throw new Error("Format CSV/TXT rusak.");
-          // Validasi kolom agar tidak memunculkan pilihan kosong (Blank string fixes)
           const numCols = parsed.headers.filter(h => h && h.trim() !== '' && parsed.rows.slice(0, 10).some(r => !isNaN(parseFloat(r[h]))));
           if(!numCols.length) throw new Error("Gagal menemukan kolom angka. Pastikan file valid.");
           setData({ ...parsed, numericColumns: numCols }); setSelectedCol(numCols[0]);
@@ -267,9 +271,9 @@
           )}
           {data && (
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-              <div className="xl:col-span-1 space-y-6"><div className="bg-[#0a1526]/90 border border-blue-500/20 rounded-[2.5rem] p-8"><CustomSelect label="Pilih Variabel" options={data.numericColumns.map(c=>({value:c,label:c}))} value={selectedCol} onChange={setSelectedCol} /><button onClick={()=>setData(null)} className="mt-6 w-full py-4 bg-red-500/10 text-red-400 rounded-2xl font-bold">Tutup Data</button></div></div>
+              <div className="xl:col-span-1 space-y-6"><div className="bg-[#0a1526]/90 border border-blue-500/20 rounded-[2.5rem] p-8"><CustomSelect label="Pilih Variabel" options={data.numericColumns.map(c=>({value:c,label:c}))} value={selectedCol} onChange={setSelectedCol} /><button onClick={()=>setData(null)} className="mt-6 w-full py-4 bg-red-500/10 text-red-400 rounded-2xl font-bold hover:bg-red-500/20">Tutup Data</button></div></div>
               <div className="xl:col-span-2 space-y-8">
-                {stats && (<div className="bg-[#0a1526] border border-blue-500/20 rounded-[2.5rem] p-8"><div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-bold text-white">Metrik Tendensi</h3><button onClick={runAI} disabled={loading} className="bg-blue-600 text-white px-8 py-3 rounded-2xl font-bold">{loading?'Sintesis...':'Tanya AI'}</button></div><div className="grid grid-cols-2 sm:grid-cols-4 gap-4"><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">N (SAMPEL)</p><p className="text-2xl font-bold text-white">{stats.n}</p></div><div className="bg-blue-600 p-4 rounded-xl"><p className="text-xs text-blue-200">MEAN</p><p className="text-2xl font-bold text-white">{stats.mean}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">MEDIAN</p><p className="text-2xl font-bold text-white">{stats.median}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">STD DEV</p><p className="text-2xl font-bold text-white">{stats.stdDev}</p></div></div></div>)}
+                {stats && (<div className="bg-[#0a1526] border border-blue-500/20 rounded-[2.5rem] p-8"><div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-bold text-white">Metrik Tendensi</h3><button onClick={runAI} disabled={loading} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-2xl font-bold">{loading?'Sintesis...':'Tanya AI'}</button></div><div className="grid grid-cols-2 sm:grid-cols-4 gap-4"><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">N (SAMPEL)</p><p className="text-2xl font-bold text-white">{stats.n}</p></div><div className="bg-blue-600 p-4 rounded-xl"><p className="text-xs text-blue-200">MEAN</p><p className="text-2xl font-bold text-white">{stats.mean}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">MEDIAN</p><p className="text-2xl font-bold text-white">{stats.median}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">STD DEV</p><p className="text-2xl font-bold text-white">{stats.stdDev}</p></div></div></div>)}
                 {aiResp && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 max-h-[70vh] overflow-y-auto custom-scrollbar"><div className="flex justify-between items-center mb-6"><span className="bg-blue-600 text-white px-4 py-1.5 rounded-full text-xs font-bold uppercase">Sintesis AI</span><button onClick={()=>setAiResp(null)} className="text-red-400"><Icons.Trash className="w-5 h-5"/></button></div><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiResp.text)}}/></div>)}
               </div>
             </div>
@@ -278,37 +282,84 @@
       );
     }
 
-    // --- MODUL 4: DOCUMENT SCANNER ---
+    // --- MODUL 4: DOCUMENT SCANNER (DENGAN KEYWORD SUGGESTION OTOMATIS) ---
     function DocumentScannerModule({ onError, onOpenSettings }) {
-      const [fileState, setFileState] = useState(null); const [extractedText, setExtractedText] = useState([]); const [searchQuery, setSearchQuery] = useState(''); const [aiAnswer, setAiAnswer] = useState(''); const [loading, setLoading] = useState(false); const [fileName, setFileName] = useState('');
+      const [fileState, setFileState] = useState(null); const [extractedText, setExtractedText] = useState([]); 
+      const [searchQuery, setSearchQuery] = useState(''); const [aiAnswer, setAiAnswer] = useState(''); 
+      const [loading, setLoading] = useState(false); const [fileName, setFileName] = useState('');
+      const [suggestions, setSuggestions] = useState([]); const [isMining, setIsMining] = useState(false);
+
+      const generateKeywords = async (fullText) => {
+         setIsMining(true);
+         try {
+             const sys = `TUGAS: Ekstrak persis 4 frasa kata kunci (Hot Topics) utama dari dokumen ini. Pisahkan HANYA dengan tanda koma. DILARANG menggunakan penomoran atau simbol. Contoh: Analisis Risiko, Kebijakan Fiskal, Dampak Inflasi, Saham Syariah`;
+             const res = await executeAIEngine("Ekstrak kata kunci", sys, fullText.substring(0, 15000));
+             const keys = res.text.split(',').map(k => k.trim().replace(/[^a-zA-Z0-9 -]/g, '')).filter(k => k.length > 3);
+             setSuggestions(keys);
+         } catch(e) { console.warn("Background AI Mining failed."); } finally { setIsMining(false); }
+      };
+
       const handleFile = async (e) => {
-        const file = e.target.files[0]; if(!file) return; setFileName(file.name); setFileState('loading');
+        const file = e.target.files[0]; if(!file) return; setFileName(file.name); setFileState('loading'); setSuggestions([]); setAiAnswer(''); setSearchQuery('');
         try {
-          const ext = file.name.split('.').pop().toLowerCase(); let parsed = [];
-          if (ext === 'pdf') { const pdfjs = await loadPdfJs(); const doc = await pdfjs.getDocument(await file.arrayBuffer()).promise; for(let i=1; i<=Math.min(doc.numPages, 100); i++){ parsed.push({page:i, text: (await (await doc.getPage(i)).getTextContent()).items.map(t=>t.str).join(' ')}); } }
-          else if (ext === 'docx') { const res = await (await loadMammothJs()).extractRawText({arrayBuffer: await file.arrayBuffer()}); const chunks = res.value.match(/.{1,2000}/g)||[]; chunks.forEach((c,i)=>parsed.push({page:i+1, text:c})); }
+          const ext = file.name.split('.').pop().toLowerCase(); let parsed = []; let textRaw = "";
+          if (ext === 'pdf') { const pdfjs = await loadPdfJs(); const doc = await pdfjs.getDocument(await file.arrayBuffer()).promise; for(let i=1; i<=Math.min(doc.numPages, 100); i++){ const t = (await (await doc.getPage(i)).getTextContent()).items.map(t=>t.str).join(' '); parsed.push({page:i, text: t}); textRaw += t + " ";} }
+          else if (ext === 'docx') { const res = await (await loadMammothJs()).extractRawText({arrayBuffer: await file.arrayBuffer()}); textRaw = res.value; const chunks = textRaw.match(/.{1,2000}/g)||[]; chunks.forEach((c,i)=>parsed.push({page:i+1, text:c})); }
           else throw new Error("Gunakan format PDF/DOCX.");
           setExtractedText(parsed); setFileState('loaded'); onError("Sukses diekstrak.", "success");
+          
+          // Trigger Auto-Mining
+          if(textRaw) generateKeywords(textRaw);
         } catch(err) { onError(err.message, "error"); setFileState(null); } e.target.value='';
       };
-      const runSearch = async (e) => {
-        e.preventDefault(); if(!searchQuery.trim()) return; setLoading(true); setAiAnswer('');
-        try { const ctx = extractedText.slice(0, 15).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); setAiAnswer((await executeAIEngine(searchQuery, `Jawab MURNI berdasarkan dokumen. Beri referensi (Hal X).`, ctx)).text); }
-        catch(err) { setAiAnswer(err.message); } finally { setLoading(false); }
+
+      const runSearch = async (queryParam) => {
+        const finalQuery = typeof queryParam === 'string' ? queryParam : searchQuery;
+        if(typeof queryParam === 'string') setSearchQuery(queryParam); // Update input box if clicked from pill
+        if(!finalQuery.trim()) return; 
+        
+        setLoading(true); setAiAnswer('');
+        try { const ctx = extractedText.slice(0, 15).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); setAiAnswer((await executeAIEngine(finalQuery, `Jawab MURNI berdasarkan dokumen. Beri referensi (Hal X).`, ctx)).text); }
+        catch(err) { (err.status===401||err.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : setAiAnswer(err.message); } finally { setLoading(false); }
       };
+
       return (
         <div className="w-full">
-          {fileState === null && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-10 flex flex-col items-center"><Icons.DocumentSearch className="w-16 h-16 text-blue-400 mb-6" /><h3 className="text-2xl font-bold text-white mb-6">Pemindai Naskah (PDF/DOCX)</h3><label className="w-full max-w-md bg-blue-600 text-white h-[64px] rounded-[2rem] flex justify-center items-center font-bold cursor-pointer">Pilih Dokumen<input type="file" onChange={handleFile} className="hidden" /></label></div>)}
-          {fileState === 'loading' && <div className="py-24 text-center"><div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div><p className="text-blue-400">Mengekstrak...</p></div>}
+          {fileState === null && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-10 flex flex-col items-center"><Icons.DocumentSearch className="w-16 h-16 text-blue-400 mb-6" /><h3 className="text-2xl font-bold text-white mb-6">Pemindai Naskah (PDF/DOCX)</h3><label className="w-full max-w-md bg-blue-600 hover:bg-blue-500 text-white h-[64px] rounded-[2rem] flex justify-center items-center font-bold cursor-pointer transition-colors">Pilih Dokumen<input type="file" onChange={handleFile} className="hidden" /></label></div>)}
+          {fileState === 'loading' && <div className="py-24 text-center"><div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div><p className="text-blue-400">Mengekstrak ke Memori...</p></div>}
           {fileState === 'loaded' && (
-            <div className="space-y-8"><div className="bg-[#0a1526]/80 p-8 rounded-[3rem] border border-blue-400/20"><div className="flex justify-between mb-6"><h3 className="text-xl font-bold text-white truncate max-w-[80%]">{fileName}</h3><button onClick={()=>{setFileState(null);setAiAnswer('');}} className="p-2 bg-red-500/10 text-red-400 rounded-full"><Icons.Trash className="w-5 h-5"/></button></div><form onSubmit={runSearch} className="flex flex-col gap-4"><input type="text" value={searchQuery} onChange={(e)=>setSearchQuery(e.target.value)} placeholder="Tanya AI tentang isi dokumen ini..." className="w-full h-[64px] bg-[#050a14]/80 border border-white/10 rounded-[2rem] px-6 text-white text-lg" /><button type="submit" disabled={!searchQuery||loading} className="bg-blue-600 h-[64px] rounded-[2rem] font-bold text-white">Tanya AI</button></form></div>
-            {aiAnswer && (<div className="bg-[#0a1526]/80 p-8 rounded-[3rem] border border-blue-400/20 max-h-[70vh] overflow-y-auto"><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiAnswer)}}/></div>)}</div>
+            <div className="space-y-8">
+              <div className="bg-[#0a1526]/80 p-8 rounded-[3rem] border border-blue-400/20">
+                <div className="flex justify-between mb-6 items-center">
+                   <h3 className="text-lg font-bold text-white truncate max-w-[80%] uppercase">{fileName}</h3>
+                   <button onClick={()=>{setFileState(null);setAiAnswer('');setSuggestions([]);setSearchQuery('');}} className="p-3 bg-red-500/10 text-red-400 rounded-full hover:bg-red-500/20 transition-colors"><Icons.Trash className="w-5 h-5"/></button>
+                </div>
+                
+                {/* AI HOT TOPICS SUGGESTIONS */}
+                <div className="mb-4">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-2">{isMining ? 'AI Sedang Menambang Topik...' : (suggestions.length > 0 ? 'Topik Krusial Terdeteksi:' : '')}</span>
+                  <div className="flex flex-wrap gap-2">
+                     {suggestions.map((sug, i) => (
+                        <button key={i} onClick={() => runSearch(sug)} disabled={loading} className="bg-blue-500/10 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/20 text-xs px-4 py-2 rounded-xl transition-all shadow-sm font-semibold disabled:opacity-50">
+                           {sug}
+                        </button>
+                     ))}
+                  </div>
+                </div>
+
+                <form onSubmit={runSearch} className="flex flex-col gap-4">
+                  <input type="text" value={searchQuery} onChange={(e)=>setSearchQuery(e.target.value)} placeholder="Tanya AI tentang isi dokumen ini secara manual..." className="w-full h-[64px] bg-[#050a14]/80 border border-white/10 rounded-[2rem] px-6 text-white text-lg outline-none focus:border-blue-500" />
+                  <button type="submit" disabled={!searchQuery||loading} className="bg-blue-600 hover:bg-blue-500 h-[64px] rounded-[2rem] font-bold text-white transition-colors">Tanya AI</button>
+                </form>
+              </div>
+              {aiAnswer && (<div className="bg-[#0a1526]/80 p-8 rounded-[3rem] border border-blue-400/20 max-h-[70vh] overflow-y-auto custom-scrollbar"><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiAnswer)}}/></div>)}
+            </div>
           )}
         </div>
       );
     }
 
-    // --- MODUL 5: ACADEMIC REFINER (WITH PDF CLEANSING) ---
+    // --- MODUL 5: ACADEMIC REFINER ---
     function AcademicRefinerModule({ onError, onOpenSettings }) {
       const [rawText, setRawText] = useState(''); const [refinedText, setRefinedText] = useState(''); const [loading, setLoading] = useState(false); const [isExtracting, setIsExtracting] = useState(false);
 
@@ -339,17 +390,17 @@
           <div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 mb-12">
             <h3 className="text-2xl font-bold text-white mb-2">Laboratorium Diksi (PDF)</h3>
             <p className="text-sm text-slate-400 mb-6">Unggah PDF. AI akan membuang Daftar Pustaka/Isi otomatis lalu memparafrase isinya untuk lolos Turnitin.</p>
-            <div className="mb-6"><label className="bg-blue-600/20 text-blue-300 border border-blue-500/30 px-6 py-3 rounded-2xl text-sm font-bold cursor-pointer inline-flex items-center"><Icons.Upload className="w-5 h-5 mr-2" />{isExtracting ? 'Mengekstrak AI...' : 'Unggah PDF/DOCX'}<input type="file" accept=".pdf,.docx,.txt" onChange={handleFileUpload} className="hidden" disabled={isExtracting} /></label></div>
-            <form onSubmit={runRefiner} className="flex flex-col gap-5"><textarea value={rawText} onChange={(e)=>setRawText(e.target.value)} placeholder="Atau paste draf skripsi langsung..." className="w-full min-h-[250px] bg-[#050a14]/80 border border-white/10 rounded-2xl p-6 text-white custom-scrollbar"></textarea><button type="submit" disabled={loading||!rawText||isExtracting} className="self-end bg-blue-600 text-white px-10 h-14 rounded-2xl font-bold">{loading?'Memproses...':'Eksekusi Parafrase'}</button></form>
+            <div className="mb-6"><label className="bg-blue-600/20 text-blue-300 border border-blue-500/30 px-6 py-3 rounded-2xl text-sm font-bold cursor-pointer inline-flex items-center hover:bg-blue-600/40"><Icons.Upload className="w-5 h-5 mr-2" />{isExtracting ? 'Mengekstrak AI...' : 'Unggah PDF/DOCX'}<input type="file" accept=".pdf,.docx,.txt" onChange={handleFileUpload} className="hidden" disabled={isExtracting} /></label></div>
+            <form onSubmit={runRefiner} className="flex flex-col gap-5"><textarea value={rawText} onChange={(e)=>setRawText(e.target.value)} placeholder="Atau paste draf skripsi langsung..." className="w-full min-h-[250px] bg-[#050a14]/80 border border-white/10 rounded-2xl p-6 text-white custom-scrollbar outline-none focus:border-blue-500"></textarea><button type="submit" disabled={loading||!rawText||isExtracting} className="self-end bg-blue-600 hover:bg-blue-500 text-white px-10 h-14 rounded-2xl font-bold disabled:opacity-50 transition-colors">{loading?'Memproses...':'Eksekusi Parafrase'}</button></form>
           </div>
-          {refinedText && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 max-h-[70vh] overflow-y-auto custom-scrollbar"><div className="flex justify-between items-center mb-6"><h3 className="text-xl font-bold text-white">Hasil Parafrase</h3><button onClick={()=>copyToClipboard(refinedText,()=>onError("Teks disalin!","success"))} className="p-3 bg-blue-500/10 text-blue-400 rounded-full"><Icons.Copy className="w-5 h-5"/></button></div><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html:parseMarkdownToHTML(refinedText)}}/></div>)}
+          {refinedText && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 max-h-[70vh] overflow-y-auto custom-scrollbar"><div className="flex justify-between items-center mb-6"><h3 className="text-xl font-bold text-white">Hasil Parafrase</h3><button onClick={()=>copyToClipboard(refinedText,()=>onError("Teks disalin!","success"))} className="p-3 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-full transition-colors"><Icons.Copy className="w-5 h-5"/></button></div><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html:parseMarkdownToHTML(refinedText)}}/></div>)}
         </div>
       );
     }
 
-    // --- MAIN APP ---
+    // --- MAIN APP (State Retention via CSS 'hidden') ---
     function NexusApp() {
-      const [activeTab, setActiveTab] = useState('ai');
+      const [activeTab, setActiveTab] = useState('scanner'); 
       const [toast, setToast] = useState({ visible: false, message: '', type: 'error' });
       const [isSettingsOpen, setIsSettingsOpen] = useState(false);
       const triggerToast = (m, t = 'error') => setToast({ visible: true, message: m, type: t });
@@ -358,7 +409,7 @@
         <div className="min-h-screen relative overflow-x-hidden flex flex-col items-center">
           <Toast isVisible={toast.visible} message={toast.message} type={toast.type} onClose={() => setToast(prev => ({...prev, visible: false}))} />
           <ApiKeyModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
-          <button type="button" onClick={() => setIsSettingsOpen(true)} className="fixed top-6 right-6 z-50 p-3 bg-white/5 border border-white/10 rounded-full shadow-lg"><Icons.Settings className="w-6 h-6 text-slate-400" /></button>
+          <button type="button" onClick={() => setIsSettingsOpen(true)} className="fixed top-6 right-6 z-50 p-3 bg-white/5 border border-white/10 rounded-full shadow-lg hover:bg-white/10 transition-colors"><Icons.Settings className="w-6 h-6 text-slate-400" /></button>
           
           <header className="w-full pt-16 pb-10 flex flex-col items-center px-6">
             <h1 className="text-6xl sm:text-7xl font-black text-transparent bg-clip-text bg-gradient-to-b from-white to-blue-200">NEXUS</h1>
@@ -367,20 +418,21 @@
 
           <div className="w-full px-4 mb-12 flex justify-center sticky top-4 z-40">
             <div className="bg-[#050a14]/60 backdrop-blur-[40px] p-2 rounded-3xl border border-blue-400/20 flex space-x-2 overflow-x-auto max-w-full hide-scrollbar">
-              <button onClick={()=>setActiveTab('ai')} className={`flex items-center space-x-2 px-5 py-3 rounded-2xl font-bold text-sm shrink-0 ${activeTab==='ai'?'bg-blue-600 text-white':'text-slate-400'}`}><Icons.Brain className="w-5 h-5"/><span>Intelijen</span></button>
-              <button onClick={()=>setActiveTab('journal')} className={`flex items-center space-x-2 px-5 py-3 rounded-2xl font-bold text-sm shrink-0 ${activeTab==='journal'?'bg-blue-600 text-white':'text-slate-400'}`}><Icons.Book className="w-5 h-5"/><span>Jurnal</span></button>
-              <button onClick={()=>setActiveTab('spss')} className={`flex items-center space-x-2 px-5 py-3 rounded-2xl font-bold text-sm shrink-0 ${activeTab==='spss'?'bg-blue-600 text-white':'text-slate-400'}`}><Icons.Database className="w-5 h-5"/><span>Data</span></button>
-              <button onClick={()=>setActiveTab('scanner')} className={`flex items-center space-x-2 px-5 py-3 rounded-2xl font-bold text-sm shrink-0 ${activeTab==='scanner'?'bg-blue-600 text-white':'text-slate-400'}`}><Icons.DocumentSearch className="w-5 h-5"/><span>Pemindai</span></button>
-              <button onClick={()=>setActiveTab('refiner')} className={`flex items-center space-x-2 px-5 py-3 rounded-2xl font-bold text-sm shrink-0 ${activeTab==='refiner'?'bg-blue-600 text-white':'text-slate-400'}`}><Icons.PenTool className="w-5 h-5"/><span>Lab Diksi</span></button>
+              <button onClick={()=>setActiveTab('ai')} className={`flex items-center space-x-2 px-5 py-3 rounded-2xl font-bold text-sm shrink-0 transition-all ${activeTab==='ai'?'bg-blue-600 text-white shadow-lg':'text-slate-400 hover:text-white hover:bg-white/5'}`}><Icons.Brain className="w-5 h-5"/><span>Intelijen</span></button>
+              <button onClick={()=>setActiveTab('journal')} className={`flex items-center space-x-2 px-5 py-3 rounded-2xl font-bold text-sm shrink-0 transition-all ${activeTab==='journal'?'bg-blue-600 text-white shadow-lg':'text-slate-400 hover:text-white hover:bg-white/5'}`}><Icons.Book className="w-5 h-5"/><span>Jurnal</span></button>
+              <button onClick={()=>setActiveTab('spss')} className={`flex items-center space-x-2 px-5 py-3 rounded-2xl font-bold text-sm shrink-0 transition-all ${activeTab==='spss'?'bg-blue-600 text-white shadow-lg':'text-slate-400 hover:text-white hover:bg-white/5'}`}><Icons.Database className="w-5 h-5"/><span>Data</span></button>
+              <button onClick={()=>setActiveTab('scanner')} className={`flex items-center space-x-2 px-5 py-3 rounded-2xl font-bold text-sm shrink-0 transition-all ${activeTab==='scanner'?'bg-blue-600 text-white shadow-lg':'text-slate-400 hover:text-white hover:bg-white/5'}`}><Icons.DocumentSearch className="w-5 h-5"/><span>Pemindai</span></button>
+              <button onClick={()=>setActiveTab('refiner')} className={`flex items-center space-x-2 px-5 py-3 rounded-2xl font-bold text-sm shrink-0 transition-all ${activeTab==='refiner'?'bg-blue-600 text-white shadow-lg':'text-slate-400 hover:text-white hover:bg-white/5'}`}><Icons.PenTool className="w-5 h-5"/><span>Lab Diksi</span></button>
             </div>
           </div>
 
-          <main className="w-full max-w-5xl mx-auto px-4 pb-24 flex-1 flex flex-col z-10">
-            {activeTab === 'ai' && <AIResearcherModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} />}
-            {activeTab === 'journal' && <JournalHunterModule onError={triggerToast} />}
-            {activeTab === 'spss' && <DataAnalyzerModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} />}
-            {activeTab === 'scanner' && <DocumentScannerModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} />}
-            {activeTab === 'refiner' && <AcademicRefinerModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} />}
+          <main className="w-full max-w-5xl mx-auto px-4 pb-24 flex-1 flex flex-col z-10 relative">
+            {/* Menggunakan teknik CSS 'hidden' agar State (file terunggah, teks) tidak hilang saat pindah tab */}
+            <div className={activeTab === 'ai' ? 'w-full block animate-in fade-in' : 'hidden'}><AIResearcherModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} /></div>
+            <div className={activeTab === 'journal' ? 'w-full block animate-in fade-in' : 'hidden'}><JournalHunterModule onError={triggerToast} /></div>
+            <div className={activeTab === 'spss' ? 'w-full block animate-in fade-in' : 'hidden'}><DataAnalyzerModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} /></div>
+            <div className={activeTab === 'scanner' ? 'w-full block animate-in fade-in' : 'hidden'}><DocumentScannerModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} /></div>
+            <div className={activeTab === 'refiner' ? 'w-full block animate-in fade-in' : 'hidden'}><AcademicRefinerModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} /></div>
           </main>
           
           <style dangerouslySetInnerHTML={{__html: `.custom-scrollbar::-webkit-scrollbar{width:6px}.custom-scrollbar::-webkit-scrollbar-thumb{background:rgba(59,130,246,0.3);border-radius:10px}.hide-scrollbar::-webkit-scrollbar{display:none}`}} />
