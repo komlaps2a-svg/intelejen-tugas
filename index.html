@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NEXUS - Penelitian Engg Tools</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: { extend: { fontFamily: {
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+        mono: ['Fira Code', 'monospace'],
+      }}}
+    }
+  </script>
+</head>
+<body class="bg-[#020617] text-slate-200 antialiased selection:bg-blue-500/30 selection:text-blue-200">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // --- SYSTEM GUARD: ERROR BOUNDARY ---
+    class ErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null, errorInfo: null };
+      }
+      static getDerivedStateFromError(error) { return { hasError: true, error }; }
+      componentDidCatch(error, errorInfo) {
+        console.error("[FATAL CRASH DETECTED]:", error, errorInfo);
+        this.setState({ errorInfo });
+      }
+      render() {
+        if (this.state.hasError) {
+          return (
+            <div className="min-h-screen bg-[#020617] flex flex-col items-center justify-center p-8 text-slate-200 font-mono">
+              <div className="bg-red-900/20 border border-red-500/30 p-8 rounded-3xl max-w-2xl w-full shadow-2xl backdrop-blur-xl">
+                <h1 className="text-2xl font-bold text-red-400 mb-4 tracking-widest uppercase">Sistem Panic (Crash)</h1>
+                <p className="text-sm text-slate-400 mb-6">Aplikasi mengalami kesalahan runtime fatal. Laporan teknis:</p>
+                <div className="bg-black/50 p-4 rounded-xl border border-red-500/20 overflow-x-auto mb-8 custom-scrollbar">
+                  <p className="text-red-300 font-bold mb-2">{this.state.error?.toString()}</p>
+                  <pre className="text-[10px] text-slate-500">{this.state.errorInfo?.componentStack}</pre>
+                </div>
+                <button onClick={() => window.location.reload()} className="bg-red-600/20 hover:bg-red-600/40 text-red-300 border border-red-500/50 px-6 py-3 rounded-xl font-bold transition-all w-full">REBOOT SYSTEM</button>
+              </div>
+            </div>
+          );
+        }
+        return this.props.children;
+      }
+    }
+
+    // --- SECURE MEMORY MANAGER ---
+    const safeStorage = {
+      get: (key) => { try { return localStorage.getItem(key) || ''; } catch (e) { return ''; } },
+      set: (key, val) => { try { localStorage.setItem(key, val); } catch (e) { console.warn("Storage API diblokir."); } }
+    };
+
+    // --- ARSITEKTUR IKON SVG KUSTOM ---
+    const Icons = {
+      Search: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>,
+      Database: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125" /></svg>,
+      Book: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" /></svg>,
+      Brain: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 002.25-2.25V6.75a2.25 2.25 0 00-2.25-2.25H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25zm.75-12h9v9h-9v-9z" /></svg>,
+      ExternalLink: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" /></svg>,
+      ChevronDown: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" /></svg>,
+      Alert: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>,
+      Check: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>,
+      Trash: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" /></svg>,
+      Sparkles: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" /></svg>,
+      Settings: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>,
+      Copy: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" /></svg>,
+      DocumentSearch: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" /></svg>,
+      PenTool: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.89 1.125l-2.828.934.933-2.828a4.5 4.5 0 011.125-1.89l12.67-12.67z" /><path strokeLinecap="round" strokeLinejoin="round" d="M19.5 7.125L16.862 4.487" /></svg>,
+      Upload: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg>,
+      Target: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M7.5 15h2.25m8.024-9.75c.011.05.028.1.052.148.591 1.2.924 2.55.924 3.977a8.96 8.96 0 01-.999 4.125m.023-8.25c-.076-.365.183-.75.575-.75h.908c.889 0 1.713.518 1.972 1.368.339 1.11.521 2.287.521 3.507 0 1.553-.295 3.036-.831 4.398C20.613 14.547 19.833 15 19 15h-1.053c-.472 0-.745-.556-.5-.96a8.95 8.95 0 00.303-.54m.023-8.25H16.48a4.5 4.5 0 01-1.423-.23l-3.114-1.04a4.5 4.5 0 00-1.423-.23H6.504c-.618 0-1.217.247-1.605.729A11.95 11.95 0 002.25 12c0 .434.052.86.152 1.275m4.05-8.528c-.024.048-.041.098-.052.148m12.022 8.25a5.975 5.975 0 00-2.455 2.456" /></svg>,
+      Expand: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75v4.5m0-4.5h-4.5m4.5 0L15 9M20.25 20.25v-4.5m0 4.5h-4.5m4.5 0L15 15" /></svg>,
+      Collapse: ({ className }) => <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9V4.5M15 9h4.5M15 9l5.25-5.25M15 15v4.5M15 15h4.5M15 15l5.25 5.25" /></svg>
+    };
+
+    // --- UTILITIES ---
+    const useOutsideClick = (callback) => {
+      const ref = useRef();
+      useEffect(() => {
+        const handleClick = (e) => { if (ref.current && !ref.current.contains(e.target)) callback(); };
+        document.addEventListener('mousedown', handleClick);
+        return () => document.removeEventListener('mousedown', handleClick);
+      }, [callback]);
+      return ref;
+    };
+
+    const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const calculateStats = (dataArray) => {
+      const n = dataArray.length;
+      if (n === 0) return { mean: 0, median: 0, min: 0, max: 0, variance: 0, stdDev: 0 };
+      const sum = dataArray.reduce((acc, val) => acc + val, 0);
+      const mean = sum / n;
+      const sorted = [...dataArray].sort((a, b) => a - b);
+      const mid = Math.floor(n / 2);
+      const median = n % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+      const variance = dataArray.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / (n > 1 ? n - 1 : 1);
+      return { n, mean: mean.toFixed(3), median: median.toFixed(3), min: sorted[0], max: sorted[n - 1], variance: variance.toFixed(3), stdDev: Math.sqrt(variance).toFixed(3) };
+    };
+
+    const parseCSV = (text) => {
+      const lines = text.split('\n').filter(line => line.trim() !== '');
+      if (lines.length < 2) return null;
+      const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+      const rows = lines.slice(1).map(line => {
+        const values = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
+        return headers.reduce((obj, header, i) => { obj[header] = values[i]; return obj; }, {});
+      });
+      return { headers, rows };
+    };
+
+    const fetchWithBackoff = async (url, options = {}, maxRetries = 3) => {
+      const delays = [1000, 2000, 4000];
+      for (let i = 0; i < maxRetries; i++) {
+        try {
+          const response = await fetch(url, options);
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            const err = new Error(`${errorData.error?.message || response.statusText}`);
+            err.status = response.status;
+            throw err;
+          }
+          return response;
+        } catch (error) {
+          if (error.status >= 400 && error.status < 500 && error.status !== 429) throw error;
+          if (i === maxRetries - 1) throw error;
+          await new Promise(resolve => setTimeout(resolve, delays[i]));
+        }
+      }
+    };
+
+    const stripMarkdown = (md) => {
+      if (!md) return '';
+      return md.replace(/#{1,6}\s+/g, '').replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/`{1,3}(.*?)`{1,3}/g, '$1').replace(/\n\s*\n/g, '\n\n'); 
+    };
+
+    const copyToClipboard = (text, onSuccess) => {
+      const cleanText = stripMarkdown(text);
+      const textArea = document.createElement("textarea");
+      textArea.value = cleanText;
+      textArea.style.position = "fixed"; textArea.style.left = "-9999px";
+      document.body.appendChild(textArea); textArea.select();
+      try { document.execCommand('copy'); if (onSuccess) onSuccess(); } catch (err) { console.error(err); }
+      document.body.removeChild(textArea);
+    };
+
+    // --- NEXUS AI ENGINE ---
+    const executeAIEngine = async (prompt, systemPrompt, customContext = "") => {
+      const localKey = safeStorage.get('nexus_api_key');
+      const isInternal = localKey.trim() === "";
+
+      const modelsToTry = isInternal ? [
+         { name: "gemini-2.5-flash-preview-09-2025", useSearch: true, maxTokens: 8192 } 
+      ] : [
+         { name: "gemini-2.5-flash", useSearch: true, maxTokens: 8192 },    
+         { name: "gemini-1.5-flash", useSearch: false, maxTokens: 8192 }
+      ];
+
+      let lastError = null;
+      const safeContext = customContext ? customContext.substring(0, 10000) : ""; 
+      const finalPrompt = customContext ? `[KONTEKS DOKUMEN LOKAL]:\n${safeContext}\n\n[PERTANYAAN PENGGUNA]:\n${prompt}` : prompt;
+
+      for (const config of modelsToTry) {
+         try {
+             const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.name}:generateContent?key=${localKey}`;
+             const payload = {
+                 contents: [{ parts: [{ text: finalPrompt }] }],
+                 systemInstruction: { parts: [{ text: systemPrompt }] },
+                 generationConfig: { maxOutputTokens: config.maxTokens, temperature: 0.5 }
+             };
+             if (config.useSearch && !customContext) payload.tools = [{ google_search: {} }];
+
+             const res = await fetchWithBackoff(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+             const data = await res.json();
+             const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+             if (!text) throw new Error("Respons diblokir filter keamanan Google.");
+             const sources = data.candidates?.[0]?.groundingMetadata?.groundingAttributions?.map(a => ({ uri: a.web?.uri, title: a.web?.title })) || [];
+             return { text, sources, modelUsed: config.name };
+         } catch (err) {
+             lastError = err;
+             if (err.status === 401 || err.status === 403 || err.message.includes('API key not valid')) {
+                 const fatalErr = new Error("HTTP 401/403: API Key Ditolak. Harap periksa di menu Pengaturan.");
+                 fatalErr.status = err.status;
+                 throw fatalErr;
+             }
+         }
+      }
+      if (lastError && lastError.message.includes("400")) throw new Error(`Batasan Sistem (400): Teks terlalu panjang. [Log: ${lastError.message}]`);
+      throw new Error(`Gagal memproses AI: ${lastError?.message || 'Koneksi terputus'}`); 
+    };
+
+    // --- DYNAMIC SCRIPT LOADERS ---
+    const loadPdfJs = async () => {
+      if (window.pdfjsLib) return window.pdfjsLib;
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script'); script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        script.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; resolve(window.pdfjsLib); };
+        script.onerror = () => reject(new Error("Gagal memuat PDF.js")); document.head.appendChild(script);
+      });
+    };
+    const loadMammothJs = async () => {
+      if (window.mammoth) return window.mammoth;
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script'); script.src = 'https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js';
+        script.onload = () => resolve(window.mammoth); script.onerror = () => reject(new Error("Gagal memuat mammoth.js")); document.head.appendChild(script);
+      });
+    };
+    const loadJsZip = async () => {
+      if (window.JSZip) return window.JSZip;
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script'); script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+        script.onload = () => resolve(window.JSZip); script.onerror = () => reject(new Error("Gagal memuat JSZip")); document.head.appendChild(script);
+      });
+    };
+    const loadSheetJs = async () => {
+      if (window.XLSX) return window.XLSX;
+      return new Promise((resolve, reject) => {
+        const script = document.createElement('script'); script.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+        script.onload = () => resolve(window.XLSX); script.onerror = () => reject(new Error("Gagal memuat SheetJS")); document.head.appendChild(script);
+      });
+    };
+    const parseGoogleSheetsUrlToCsv = (rawUrl) => {
+      if (rawUrl.includes('export?format=csv')) return rawUrl;
+      const match = rawUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      if (match) { const sheetId = match[1]; const gidMatch = rawUrl.match(/[#&]gid=([0-9]+)/); const gid = gidMatch ? gidMatch[1] : '0'; return `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`; }
+      return rawUrl;
+    };
+
+    // --- HTML PARSER ---
+    const parseMarkdownToHTML = (markdownText) => {
+      if (!markdownText) return '';
+      const linkSvgIcon = `<svg class="w-3.5 h-3.5 inline mr-1.5 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244"></path></svg>`;
+      const blocks = markdownText.split('\n\n');
+      return blocks.map(block => {
+        if (block.startsWith('#')) {
+          const match = block.match(/^(#{1,6})\s+(.*)/);
+          if (match) {
+            const level = match[1].length;
+            let content = match[2].replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-bold">$1</strong>');
+            const styles = { 1: 'text-3xl sm:text-4xl font-bold text-white mt-12 mb-6 tracking-tight border-b border-white/10 pb-4 break-words', 2: 'text-2xl sm:text-3xl font-bold text-white mt-10 mb-4 tracking-tight break-words', 3: 'text-xl sm:text-2xl font-semibold text-blue-300 mt-8 mb-3 break-words' };
+            const style = styles[level] || 'text-lg font-semibold text-white mt-6 mb-2 break-words';
+            return `<h${level} class="${style} w-full overflow-wrap-anywhere whitespace-normal break-words">${content}</h${level}>`;
+          }
+        }
+        const processInlineText = (text) => text.replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>').replace(/\*(.*?)\*/g, '<em class="text-slate-300 italic">$1</em>').replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, `<br/><a href="$2" target="_blank" class="text-blue-400 hover:text-blue-300 underline decoration-blue-500/30 underline-offset-4 inline-flex items-center mt-3 mb-1 bg-blue-500/10 px-3 py-1.5 rounded-xl border border-blue-500/20 shadow-sm transition-colors hover:bg-blue-500/20 text-xs sm:text-sm font-semibold max-w-full" style="word-break: break-all;">${linkSvgIcon} $1</a>`).replace(/(^|[^"'])(https?:\/\/[^\s]+)/g, `$1<a href="$2" target="_blank" class="text-blue-400 hover:text-blue-300 underline font-mono text-xs mx-1 bg-white/5 px-2 py-0.5 rounded max-w-full inline-block" style="word-break: break-all;">$2</a>`);
+        if (block.startsWith('- ') || block.startsWith('* ')) {
+          const listItems = block.split('\n').filter(l => l.trim() !== '').map(item => `<li class="ml-6 mb-4 list-none relative before:content-[''] before:absolute before:-left-5 before:top-2.5 before:w-1.5 before:h-1.5 before:bg-blue-500 before:rounded-full leading-relaxed break-words">${processInlineText(item.replace(/^[-*]\s+/, ''))}</li>`).join('');
+          return `<ul class="mb-6 w-full overflow-hidden break-words whitespace-normal overflow-wrap-anywhere">${listItems}</ul>`;
+        }
+        let p = processInlineText(block).replace(/\n/g, '<br/>'); 
+        return `<p class="mb-6 leading-relaxed text-slate-300 text-[15px] sm:text-base break-words w-full overflow-wrap-anywhere whitespace-normal">${p}</p>`;
+      }).join('');
+    };
+
+    // --- COMPONENTS ---
+    function Toast({ message, isVisible, onClose, type = 'error' }) {
+      useEffect(() => { if (isVisible) { const timer = setTimeout(onClose, 5000); return () => clearTimeout(timer); } }, [isVisible, onClose]);
+      if (!isVisible) return null;
+      return (
+        <div className="fixed top-8 left-1/2 -translate-x-1/2 z-[300] animate-in slide-in-from-top-5 fade-in duration-300 w-[90%] sm:w-auto max-w-md">
+          <div className={`flex items-start sm:items-center space-x-3 px-6 py-4 rounded-[1.5rem] shadow-2xl backdrop-blur-3xl border ${type === 'error' ? 'bg-red-500/20 border-red-500/30 text-red-100' : type === 'success' ? 'bg-green-500/20 border-green-500/30 text-green-100' : 'bg-blue-500/20 border-blue-500/30 text-blue-100'}`}>
+            <div className="mt-0.5 sm:mt-0">{type === 'error' ? <Icons.Alert className="w-6 h-6 text-red-400 shrink-0" /> : <Icons.Check className="w-6 h-6 text-green-400 shrink-0" />}</div>
+            <span className="text-sm font-semibold tracking-wide leading-relaxed">{message}</span>
+          </div>
+        </div>
+      );
+    }
+
+    function ApiKeySettingsModal({ isOpen, onClose }) {
+      const [localKey, setLocalKey] = useState(safeStorage.get('nexus_api_key'));
+      if (!isOpen) return null;
+      const handleSave = () => { safeStorage.set('nexus_api_key', localKey.trim()); onClose(); };
+      return (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
+          <div className="bg-[#050a14] border border-blue-500/20 rounded-[2rem] p-8 sm:p-10 w-full max-w-lg shadow-2xl relative">
+            <h3 className="text-2xl font-bold text-white mb-2 flex items-center"><Icons.Settings className="w-6 h-6 mr-3 text-blue-400" /> Konfigurasi Engine AI</h3>
+            <p className="text-sm text-slate-400 mb-6 leading-relaxed">Sistem ini <strong>mengunci Anda menggunakan Gemini API</strong> karena Google memberikan fitur <em>Search Grounding</em> gratis. Kunci disimpan 100% lokal di browser Anda.</p>
+            <input type="password" value={localKey} onChange={(e) => setLocalKey(e.target.value)} placeholder="AIzaSy..." className="w-full h-[60px] bg-black/50 border border-white/10 rounded-[1.5rem] px-5 text-white placeholder:text-slate-600 focus:outline-none focus:border-blue-500/50 transition-all font-mono text-sm mb-8 shadow-inner" />
+            <div className="flex justify-end space-x-4">
+              <button onClick={onClose} className="px-6 py-3 rounded-[1.5rem] text-sm font-bold text-slate-400 hover:text-white hover:bg-white/5 transition-colors">Tutup</button>
+              <button onClick={handleSave} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-[1.5rem] text-sm font-bold transition-all shadow-lg">Simpan Kredensial</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function CustomSelect({ options, value, onChange, label, allowManual = false }) {
+      const [isOpen, setIsOpen] = useState(false); const [isManualMode, setIsManualMode] = useState(false); const [manualValue, setManualValue] = useState('');
+      const ref = useOutsideClick(() => setIsOpen(false));
+      const currentLabel = isManualMode ? manualValue : (options.find(o => o.value === value)?.label || 'Pilih...');
+      const handleSelect = (val) => { if (val === 'manual') { setIsManualMode(true); setIsOpen(false); setManualValue(''); onChange(''); } else { setIsManualMode(false); onChange(val); setIsOpen(false); } };
+      return (
+        <div className="relative w-full" ref={ref}>
+          {label && <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-widest mb-2 pl-1">{label}</label>}
+          {isManualMode ? (
+            <div className="relative flex items-center"><input type="number" autoFocus value={manualValue} onChange={(e) => setManualValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && onChange(manualValue)} onBlur={() => onChange(manualValue)} placeholder="Ketik tahun..." className="w-full h-[56px] sm:h-[64px] bg-[#0a1526]/80 border border-white/10 rounded-[1.5rem] px-5 text-white focus:outline-none focus:border-blue-500/50" /><button onClick={() => { setIsManualMode(false); onChange(options[0].value); }} className="absolute right-3 p-2 bg-white/5 rounded-full"><Icons.Trash className="w-5 h-5 text-slate-400"/></button></div>
+          ) : (
+            <button type="button" onClick={() => setIsOpen(!isOpen)} className={`w-full h-[56px] sm:h-[64px] flex items-center justify-between bg-[#0a1526]/80 border ${isOpen ? 'border-blue-500/50' : 'border-white/10'} rounded-[1.5rem] px-5 text-white focus:outline-none`}><span className="truncate">{currentLabel}</span><Icons.ChevronDown className={`w-5 h-5 text-slate-400 ${isOpen ? 'rotate-180 text-blue-400' : ''}`} /></button>
+          )}
+          {isOpen && !isManualMode && (
+            <div className="absolute z-50 w-full mt-2 bg-[#050a14]/95 border border-blue-500/20 rounded-2xl shadow-2xl overflow-hidden"><ul className="max-h-60 overflow-y-auto py-2 custom-scrollbar">{options.map((opt) => (<li key={opt.value}><button type="button" onClick={() => handleSelect(opt.value)} className={`w-full text-left px-5 py-3 text-sm flex justify-between ${value === opt.value ? 'bg-blue-600/20 text-blue-400' : 'text-slate-300'}`}>{opt.label}{value === opt.value && <Icons.Check className="w-5 h-5" />}</button></li>))}{allowManual && (<li className="border-t border-white/10 mt-1 pt-1"><button type="button" onClick={() => handleSelect('manual')} className="w-full text-left px-5 py-3 text-sm text-slate-400 italic">Atur Tahun Manual...</button></li>)}</ul></div>
+          )}
+        </div>
+      );
+    }
+
+    // --- MODUL 1: AI RESEARCHER ---
+    function AIResearcherModule({ onError, onOpenSettings }) {
+      const [query, setQuery] = useState(''); const [loading, setLoading] = useState(false); const [response, setResponse] = useState(null); const [isExpanded, setIsExpanded] = useState(false); 
+      const handleResearch = async (e) => {
+        e.preventDefault(); if (!query.trim()) return; setLoading(true); setIsExpanded(false);
+        try {
+          const sys = `Anda adalah Profesor Riset Senior. TUGAS: Tulis tinjauan pustaka akademik MENDALAM. WAJIB Google Search. Kutipan APA inline. Tautan sumber di bawah klaim [Sumber: Judul](URL). Struktur: Pendahuluan, Pro/Kontra, Sintesis, Kesimpulan.`;
+          const { text, sources } = await executeAIEngine(query, sys); setResponse({ text, sources });
+        } catch (err) { (err.status === 401 || err.status === 403) ? (onError(err.message, "error"), onOpenSettings()) : onError(`Koneksi Gagal: ${err.message}`, "error"); } finally { setLoading(false); }
+      };
+      return (
+        <div className="w-full flex flex-col flex-1">
+          <form onSubmit={handleResearch} className="relative group w-full mb-10 sm:mb-16 shrink-0"><div className="relative flex items-center bg-[#0a1526]/80 border border-blue-400/20 rounded-[2.5rem] p-2 sm:p-2.5 h-[72px] sm:h-[80px]"><div className="pl-5 pr-3 hidden md:flex items-center"><Icons.Search className="w-7 h-7 text-blue-400/70" /></div><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik Riset..." className="flex-1 h-full bg-transparent border-none outline-none text-white px-5 text-lg sm:text-xl font-medium min-w-0" /><button type="submit" disabled={loading || !query.trim()} className="shrink-0 bg-white text-black hover:bg-slate-200 px-8 sm:px-10 h-full rounded-[2rem] text-base font-bold disabled:opacity-50">{loading ? 'Menyusun...' : 'Sintesis'}</button></div></form>
+          {loading && <div className="space-y-6 animate-pulse bg-[#0a1526]/60 p-10 rounded-[3rem]"><div className="h-6 bg-blue-500/20 rounded-full w-2/4"></div><div className="h-4 bg-blue-500/10 rounded-full w-full"></div></div>}
+          {response && !loading && (
+            <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all ${isExpanded ? 'min-h-[50vh] flex-1' : 'max-h-[85vh] overflow-hidden'}`}><div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center"><div className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black uppercase"><Icons.Sparkles className="w-4 h-4 inline mr-2" />Hasil</div><div className="flex space-x-2"><button onClick={() => setIsExpanded(!isExpanded)} className="p-3 bg-blue-500/10 text-blue-400 rounded-full">{isExpanded ? <Icons.Collapse className="w-5 h-5"/> : <Icons.Expand className="w-5 h-5"/>}</button><button onClick={() => copyToClipboard(response.text, () => onError("Disalin.", "success"))} className="p-3 bg-blue-500/10 text-blue-400 rounded-full"><Icons.Copy className="w-5 h-5"/></button><button onClick={() => {setResponse(null); setQuery('');}} className="p-3 bg-red-500/10 text-red-400 rounded-full"><Icons.Trash className="w-5 h-5"/></button></div></div><div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar flex-1'}`}><div className="prose prose-invert max-w-none w-full" dangerouslySetInnerHTML={{ __html: parseMarkdownToHTML(response.text) }} /></div></div>
+          )}
+        </div>
+      );
+    }
+
+    // --- MODUL 2: JOURNAL HUNTER ---
+    function JournalHunterModule({ onError }) {
+      const [query, setQuery] = useState(''); const [year, setYear] = useState('2023'); const [results, setResults] = useState([]); const [loading, setLoading] = useState(false);
+      const searchJournals = async (e) => {
+        e.preventDefault(); if (!query.trim()) return; setLoading(true);
+        try {
+          let url = `https://api.openalex.org/works?search=${encodeURIComponent(query)}&per-page=15&sort=cited_by_count:desc`;
+          if (year && year !== 'all') url += `&filter=publication_year:>${year}`;
+          const res = await fetchWithBackoff(url); const data = await res.json();
+          if(data.results.length === 0) onError("Tidak ada literatur ditemukan.", "error"); setResults(data.results || []);
+        } catch (err) { onError("Koneksi repositori gagal.", "error"); } finally { setLoading(false); }
+      };
+      return (
+        <div className="w-full">
+          <div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-6 sm:p-10 mb-12"><form onSubmit={searchJournals} className="flex flex-col lg:flex-row gap-5 lg:items-end w-full"><div className="flex-1 relative"><label className="block text-[11px] font-bold text-slate-500 uppercase mb-3">Kata Kunci Literasi</label><div className="relative w-full"><div className="absolute inset-y-0 left-0 pl-5 flex items-center"><Icons.Search className="w-6 h-6 text-slate-500" /></div><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Contoh: AI in Finance..." className="w-full h-[64px] bg-[#050a14]/80 border border-white/10 rounded-[1.5rem] pl-14 pr-5 text-white focus:outline-none focus:border-blue-500/50 text-lg" /></div></div><div className="w-full lg:w-72 shrink-0"><CustomSelect label="Filter Temporal" options={[{value:'all', label:'Semua Waktu'}, {value:'2024', label:'2024 - Terbaru'}, {value:'2022', label:'Sejak 2022'}]} value={year} onChange={setYear} allowManual={true} /></div><div className="w-full lg:w-auto pt-2 lg:pt-0 shrink-0"><button type="submit" disabled={loading || !query.trim()} className="w-full h-[64px] bg-blue-600 text-white px-10 rounded-[1.5rem] font-bold disabled:opacity-50">{loading ? 'Memindai...' : 'Eksekusi Protokol'}</button></div></form></div>
+          {!loading && results.length > 0 && (<div className="space-y-4"><div className="flex items-center justify-between border-b border-blue-500/20 pb-5 mb-8"><h3 className="text-base font-bold text-white">{results.length} Literatur Ditemukan</h3><button onClick={() => setResults([])} className="p-2 bg-red-500/10 text-red-400 rounded-full"><Icons.Trash className="w-4 h-4" /></button></div>{results.map((paper, idx) => (<div key={idx} className="bg-[#0a1526]/80 border border-blue-500/20 rounded-[2rem] p-6 hover:bg-[#0f1e38]/80 transition-all"><div className="flex flex-col sm:flex-row sm:justify-between gap-6"><div className="flex-1 min-w-0"><h4 className="text-xl font-semibold text-white break-words">{paper.title || "Unknown"}</h4><div className="mt-4 flex flex-wrap gap-3"><span className="px-3 py-1.5 bg-blue-500/10 rounded-lg text-xs font-bold text-blue-300">{paper.publication_year}</span><span className="text-xs font-bold text-amber-300 bg-amber-500/10 px-3 py-1.5 rounded-lg">Sitasi: {paper.cited_by_count || 0}</span></div><p className="mt-4 text-sm text-slate-400">{paper.authorships?.map(a => a.author.display_name).join(' • ') || "Anonim"}</p></div>{paper.doi && (<a href={paper.doi} target="_blank" className="w-12 h-12 bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:text-white rounded-2xl flex items-center justify-center shrink-0"><Icons.ExternalLink className="w-5 h-5" /></a>)}</div></div>))}</div>)}
+        </div>
+      );
+    }
+
+    // --- MODUL 3: DATA ANALYZER ---
+    function DataAnalyzerModule({ onError, onOpenSettings }) {
+      const [data, setData] = useState(null); const [selectedColumn, setSelectedColumn] = useState(''); const [stats, setStats] = useState(null); const [csvUrl, setCsvUrl] = useState(''); const [aiResponse, setAiResponse] = useState(null); const [loading, setLoading] = useState(false);
+      const processData = (csvText) => { try { const parsed = parseCSV(csvText); if (!parsed) throw new Error("Format salah."); const numCols = parsed.headers.filter(h => parsed.rows.slice(0, 10).some(r => !isNaN(Number(r[h])))); if(!numCols.length) throw new Error("Tidak ada numerik."); setData({ ...parsed, numericColumns: numCols }); setSelectedColumn(numCols[0]); } catch (err) { onError(err.message, "error"); setData(null); } };
+      const handleFile = (e) => { const f = e.target.files[0]; if(!f) return; const r = new FileReader(); r.onload = (ev) => { processData(ev.target.result); e.target.value = ''; }; r.readAsText(f); };
+      const handleUrl = async (e) => { e.preventDefault(); if(!csvUrl) return; try { const res = await fetch(parseGoogleSheetsUrlToCsv(csvUrl)); if(!res.ok) throw new Error("Gagal HTTP"); processData(await res.text()); } catch (err) { onError("Gagal. Pastikan Google Sheets Publik.", "error"); } };
+      useEffect(() => { if(data && selectedColumn) { const vals = data.rows.map(r => Number(r[selectedColumn])).filter(v => !isNaN(v)); setStats(calculateStats(vals)); } }, [data, selectedColumn]);
+      const runAI = async () => { if(!stats) return; setLoading(true); try { const sys = `Anda Profesor Analis. Buat Analisis PANJANG. Variabel = "${selectedColumn}". N=${stats.n}, Mean=${stats.mean}, SD=${stats.stdDev}. Hubungkan metrik dengan fenomena. Wajib sitasi inline [Sumber: Judul](URL).`; const res = await executeAIEngine("Analisis fenomena variabel ini", sys); setAiResponse(res); } catch (e) { (e.status === 401 || e.status === 403) ? (onError(e.message, "error"), onOpenSettings()) : onError(e.message, "error"); } finally { setLoading(false); } };
+      return (
+        <div className="w-full">
+          {!data && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 sm:p-16 mb-12 flex flex-col items-center"><Icons.Database className="w-16 h-16 text-blue-400 mb-6" /><h3 className="text-2xl font-bold text-white mb-4">Injeksi Matriks Data</h3><label className="w-full bg-blue-600 text-white h-[60px] rounded-[2rem] flex items-center justify-center font-bold cursor-pointer mb-4">Pilih CSV Lokal<input type="file" accept="*/*" onChange={handleFile} className="hidden" /></label><form onSubmit={handleUrl} className="flex w-full relative"><input type="url" value={csvUrl} onChange={(e)=>setCsvUrl(e.target.value)} placeholder="Tautan Google Sheets Publik" className="w-full h-[60px] bg-[#050a14]/80 border border-white/10 rounded-[2rem] px-5 pr-32 text-white" /><button type="submit" className="absolute right-2 top-2 bottom-2 bg-white text-black px-6 rounded-[1.5rem] font-bold">Ekstrak</button></form></div>)}
+          {data && (<div className="grid grid-cols-1 xl:grid-cols-3 gap-8"><div className="xl:col-span-1 space-y-6"><div className="bg-[#0a1526]/90 border border-blue-500/20 rounded-[2.5rem] p-8"><CustomSelect label="Variabel" options={data.numericColumns.map(c=>({value:c,label:c}))} value={selectedColumn} onChange={setSelectedColumn} /><button onClick={()=>setData(null)} className="mt-6 w-full py-4 bg-red-500/10 text-red-400 border border-red-500/20 rounded-2xl font-bold">Tutup</button></div></div><div className="xl:col-span-2 space-y-8">{stats && (<div className="bg-[#0a1526] border border-blue-500/20 rounded-[2.5rem] p-8"><div className="flex justify-between items-center mb-8"><h3 className="text-2xl font-bold text-white">Metrik Tendensi Sentral</h3><button onClick={runAI} disabled={loading} className="bg-blue-600 text-white px-8 py-4 rounded-[1.5rem] font-bold">{loading ? 'AI...' : 'Sintesis AI'}</button></div><div className="grid grid-cols-2 gap-4"><div className="bg-blue-500/10 p-6 rounded-2xl"><p className="text-xs text-blue-300 mb-2">SAMPEL (N)</p><p className="text-3xl font-bold text-white">{stats.n}</p></div><div className="bg-blue-600 p-6 rounded-2xl"><p className="text-xs text-blue-200 mb-2">MEAN</p><p className="text-3xl font-bold text-white">{stats.mean}</p></div><div className="bg-blue-500/10 p-6 rounded-2xl"><p className="text-xs text-blue-300 mb-2">MEDIAN</p><p className="text-3xl font-bold text-white">{stats.median}</p></div><div className="bg-blue-500/10 p-6 rounded-2xl"><p className="text-xs text-blue-300 mb-2">SD</p><p className="text-3xl font-bold text-white">{stats.stdDev}</p></div></div></div>)}{aiResponse && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-6 max-h-[85vh] overflow-y-auto"><div className="flex justify-between items-center mb-4"><span className="bg-blue-600 text-white px-5 py-2 rounded-full text-xs font-black uppercase">Hasil Analisis AI</span><button onClick={()=>setAiResponse(null)} className="text-red-400"><Icons.Trash className="w-5 h-5"/></button></div><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiResponse.text)}}/></div>)}</div></div>)}
+        </div>
+      );
+    }
+
+    // --- MODUL 4: DOCUMENT SCANNER ---
+    function DocumentScannerModule({ onError, onOpenSettings }) {
+      const [fileState, setFileState] = useState(null); const [extractedText, setExtractedText] = useState([]); const [searchQuery, setSearchQuery] = useState(''); const [searchResults, setSearchResults] = useState([]); const [aiAnswer, setAiAnswer] = useState(''); const [loading, setLoading] = useState(false); const [fileName, setFileName] = useState('');
+      const handleFile = async (e) => {
+        const file = e.target.files[0]; if(!file) return; setFileName(file.name); setFileState('loading');
+        try {
+          const ext = file.name.split('.').pop().toLowerCase(); let parsed = [];
+          if (ext === 'pdf') { const pdfjs = await loadPdfJs(); const doc = await pdfjs.getDocument(await file.arrayBuffer()).promise; for(let i=1; i<=Math.min(doc.numPages, 100); i++){ const page = await doc.getPage(i); parsed.push({page:i, text: (await page.getTextContent()).items.map(t=>t.str).join(' ')}); } }
+          else if (ext === 'docx') { const mammoth = await loadMammothJs(); const res = await mammoth.extractRawText({arrayBuffer: await file.arrayBuffer()}); const chunks = res.value.match(/.{1,2000}/g)||[]; chunks.forEach((c,i)=>parsed.push({page:i+1, text:c})); }
+          else { throw new Error("Hanya PDF/DOCX didukung penuh di versi klien ini."); }
+          setExtractedText(parsed); setFileState('loaded'); onError("Ekstraksi berhasil.", "success");
+        } catch(err) { onError(`Gagal: ${err.message}`, "error"); setFileState(null); } e.target.value='';
+      };
+      const runCritique = async () => {
+        setLoading(true); setAiAnswer('');
+        try { const ctx = extractedText.slice(0, 8).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); const sys = `Anda Profesor Penguji. Baca dokumen. Buat 5 PERTANYAAN KRITIS dan Skenario Jawaban Defensif MURNI BERDASARKAN teks. DILARANG mencari di internet.`; setAiAnswer((await executeAIEngine("Berikan kritik", sys, ctx)).text); }
+        catch(e) { (e.status === 401 || e.status === 403) ? (onError(e.message,"error"), onOpenSettings()) : setAiAnswer(e.message); } finally { setLoading(false); }
+      };
+      const runSearch = async (e) => {
+        e.preventDefault(); if(!searchQuery.trim()) return; setLoading(true); setAiAnswer('');
+        const res = []; let ctx = ""; extractedText.forEach(p => { const rx = new RegExp(escapeRegExp(searchQuery), 'gi'); let m; while((m=rx.exec(p.text))!==null){ res.push({page:p.page, snippet: p.text.substring(Math.max(0,m.index-100), m.index+searchQuery.length+100)}); ctx+=`[Hal ${p.page}]: ${p.text.substring(Math.max(0,m.index-300), m.index+300)}\n`; }}); setSearchResults(res);
+        try { const sys = `Jawab pertanyaan MURNI BERDASARKAN dokumen lokal. Beri referensi (Hal X).`; setAiAnswer((await executeAIEngine(searchQuery, sys, ctx||extractedText.slice(0,5).map(p=>p.text).join('\n'))).text); }
+        catch(err) { setAiAnswer(err.message); } finally { setLoading(false); }
+      };
+      return (
+        <div className="w-full">
+          {fileState === null && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-10 mb-12 flex flex-col items-center text-center"><Icons.DocumentSearch className="w-16 h-16 text-blue-400 mb-6" /><h3 className="text-3xl font-bold text-white mb-4">Pemindai Dokumen</h3><label className="w-full bg-blue-600 text-white h-[64px] rounded-[2rem] flex justify-center items-center font-bold cursor-pointer">Pilih Dokumen (PDF/DOCX)<input type="file" onChange={handleFile} className="hidden" /></label></div>)}
+          {fileState === 'loading' && <div className="py-24 text-center"><div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div><p className="text-blue-400">Mengekstrak...</p></div>}
+          {fileState === 'loaded' && (
+            <div className="space-y-8"><div className="bg-[#0a1526]/80 p-8 rounded-[3rem] border border-blue-400/20"><div className="flex justify-between items-center mb-6"><h3 className="text-xl font-bold text-white truncate max-w-[80%]">{fileName} ({extractedText.length} Bagian)</h3><button onClick={()=>{setFileState(null);setAiAnswer('');setSearchResults([])}} className="p-2 bg-red-500/10 text-red-400 rounded-full"><Icons.Trash className="w-5 h-5"/></button></div><form onSubmit={runSearch} className="flex flex-col gap-4"><input type="text" value={searchQuery} onChange={(e)=>setSearchQuery(e.target.value)} placeholder="Tanya AI tentang dokumen..." className="w-full h-[64px] bg-[#050a14]/80 border border-white/10 rounded-[2rem] px-6 text-white text-lg" /><div className="flex gap-4"><button type="submit" disabled={!searchQuery||loading} className="flex-1 bg-blue-600 h-[64px] rounded-[2rem] font-bold text-white">Cari & Tanya AI</button><button type="button" onClick={runCritique} disabled={loading} className="flex-1 bg-red-900/20 border border-red-500/30 text-red-300 rounded-[2rem] font-bold">Analisis Celah (Auto-Sanggah)</button></div></form></div>
+            {aiAnswer && (<div className="bg-[#0a1526]/80 p-8 rounded-[3rem] border border-blue-400/20 max-h-[70vh] overflow-y-auto"><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiAnswer)}}/></div>)}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // --- MODUL 5: ACADEMIC REFINER ---
+    function AcademicRefinerModule({ onError, onOpenSettings }) {
+      const [rawText, setRawText] = useState(''); const [refinedText, setRefinedText] = useState(''); const [loading, setLoading] = useState(false);
+      const runRefiner = async (e) => {
+        e.preventDefault(); if(!rawText) return; setLoading(true);
+        try { const sys = `Anda Editor Akademik. Parafrase teks berikut agar kohesif, ilmiah, dan turunkan indeks plagiasi (Turnitin). DILARANG mengubah makna atau menambah opini.`; setRefinedText((await executeAIEngine(rawText, sys)).text); }
+        catch(err) { (err.status===401||err.status===403) ? (onError(err.message,"error"), onOpenSettings()) : onError(err.message, "error"); } finally { setLoading(false); }
+      };
+      return (
+        <div className="w-full">
+          <div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 mb-12"><h3 className="text-2xl font-bold text-white mb-6">Laboratorium Diksi (Anti-Plagiasi)</h3><form onSubmit={runRefiner} className="flex flex-col gap-5"><textarea value={rawText} onChange={(e)=>setRawText(e.target.value)} placeholder="Tempel draf di sini..." className="w-full min-h-[250px] bg-[#050a14]/80 border border-white/10 rounded-[1.5rem] p-6 text-white focus:border-blue-500 custom-scrollbar"></textarea><button type="submit" disabled={loading||!rawText} className="self-end bg-blue-600 text-white px-12 h-[64px] rounded-[1.5rem] font-bold">{loading?'Memproses...':'Eksekusi Parafrase'}</button></form></div>
+          {refinedText && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 max-h-[70vh] overflow-y-auto"><div className="flex justify-between items-center mb-6"><h3 className="text-xl font-bold text-white">Hasil Parafrase</h3><button onClick={()=>copyToClipboard(refinedText,()=>onError("Disalin","success"))} className="p-2 bg-blue-500/10 text-blue-400 rounded-full"><Icons.Copy className="w-5 h-5"/></button></div><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html:parseMarkdownToHTML(refinedText)}}/></div>)}
+        </div>
+      );
+    }
+
+    // --- MAIN APP ---
+    function NexusApp() {
+      const [activeTab, setActiveTab] = useState('ai'); const [toast, setToast] = useState({ visible: false, message: '', type: 'error' }); const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+      const triggerToast = (message, type = 'error') => setToast({ visible: true, message, type });
+
+      return (
+        <div className="min-h-screen relative overflow-x-hidden flex flex-col items-center">
+          <Toast isVisible={toast.visible} message={toast.message} type={toast.type} onClose={() => setToast(prev => ({...prev, visible: false}))} />
+          <ApiKeySettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+          <button type="button" onClick={() => setIsSettingsOpen(true)} className="fixed top-6 right-6 z-50 p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full backdrop-blur-xl shadow-lg"><Icons.Settings className="w-6 h-6 text-slate-400 hover:text-white" /></button>
+          
+          <header className="w-full pt-16 pb-10 flex flex-col items-center px-6">
+            <h1 className="text-6xl sm:text-7xl font-black text-transparent bg-clip-text bg-gradient-to-b from-white to-blue-200">NEXUS</h1>
+            <p className="text-sm font-bold tracking-[0.3em] text-blue-400 uppercase">penelitian engg tools</p>
+          </header>
+
+          <div className="w-full px-4 mb-12 flex justify-center sticky top-4 z-40">
+            <div className="bg-[#050a14]/60 backdrop-blur-[40px] p-2 rounded-[2rem] border border-blue-400/20 flex space-x-2 overflow-x-auto max-w-full hide-scrollbar">
+              <SegmentButton active={activeTab === 'ai'} onClick={() => setActiveTab('ai')} icon={<Icons.Brain className="w-5 h-5" />} label="Intelijen Riset" />
+              <SegmentButton active={activeTab === 'journal'} onClick={() => setActiveTab('journal')} icon={<Icons.Book className="w-5 h-5" />} label="Jurnal" />
+              <SegmentButton active={activeTab === 'spss'} onClick={() => setActiveTab('spss')} icon={<Icons.Database className="w-5 h-5" />} label="Data" />
+              <SegmentButton active={activeTab === 'scanner'} onClick={() => setActiveTab('scanner')} icon={<Icons.DocumentSearch className="w-5 h-5" />} label="Pemindai" />
+              <SegmentButton active={activeTab === 'refiner'} onClick={() => setActiveTab('refiner')} icon={<Icons.PenTool className="w-5 h-5" />} label="Lab Diksi" />
+            </div>
+          </div>
+
+          <main className="w-full max-w-5xl mx-auto px-4 sm:px-8 pb-24 flex-1 flex flex-col z-10">
+            {activeTab === 'ai' && <AIResearcherModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} />}
+            {activeTab === 'journal' && <JournalHunterModule onError={triggerToast} />}
+            {activeTab === 'spss' && <DataAnalyzerModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} />}
+            {activeTab === 'scanner' && <DocumentScannerModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} />}
+            {activeTab === 'refiner' && <AcademicRefinerModule onError={triggerToast} onOpenSettings={() => setIsSettingsOpen(true)} />}
+          </main>
+          
+          <style dangerouslySetInnerHTML={{__html: `.custom-scrollbar::-webkit-scrollbar{width:8px;height:8px}.custom-scrollbar::-webkit-scrollbar-track{background:transparent}.custom-scrollbar::-webkit-scrollbar-thumb{background:rgba(59,130,246,0.2);border-radius:10px}.custom-scrollbar::-webkit-scrollbar-thumb:hover{background:rgba(59,130,246,0.4)}.hide-scrollbar::-webkit-scrollbar{display:none}`}} />
+        </div>
+      );
+    }
+
+    function SegmentButton({ active, onClick, icon, label }) {
+      return (
+        <button type="button" onClick={onClick} className={`flex items-center space-x-2 px-5 py-3 rounded-[1.5rem] font-semibold text-sm whitespace-nowrap shrink-0 transition-all ${active ? 'bg-blue-600/90 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>{icon}<span>{label}</span></button>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<ErrorBoundary><NexusApp /></ErrorBoundary>);
+  </script>
+</body>
+</html>
