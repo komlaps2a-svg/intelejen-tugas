@@ -117,9 +117,8 @@
       const modelsToTry = localKey.trim() === "" ? [ { name: "gemini-2.5-flash-preview-09-2025", useSearch: true } ] : [ { name: "gemini-2.5-flash", useSearch: true }, { name: "gemini-1.5-flash", useSearch: false } ];
       let lastError = null;
       
-      // INJEKSI KESADARAN TEMPORAL (MENGATASI HALUSINASI TAHUN 2024)
       const dateContext = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-      const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan ini sebagai acuan absolut untuk mengkalkulasi waktu, usia, maupun merespons dokumen. DILARANG KERAS berasumsi ini tahun 2023 atau 2024.]\n\n`;
+      const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan ini sebagai acuan absolut untuk mengkalkulasi waktu, usia, maupun merespons dokumen.]\n\n`;
       const fullSystemPrompt = temporalInstruction + systemPrompt;
 
       const safeContext = customContext ? customContext.substring(0, 30000) : ""; 
@@ -207,17 +206,30 @@
     // --- MODUL 1: AI RESEARCHER ---
     function AIResearcherModule({ onError, onOpenSettings }) {
       const [query, setQuery] = useState(''); const [loading, setLoading] = useState(false); const [response, setResponse] = useState(null); const [isExpanded, setIsExpanded] = useState(false); 
+      
       const handleResearch = async (e) => {
         e.preventDefault(); if (!query.trim()) return; setLoading(true); setIsExpanded(false);
-        try { const { text } = await executeAIEngine(query, `Anda Profesor Riset. Tulis tinjauan pustaka akademik MENDALAM. WAJIB Google Search. Kutipan APA inline. Tautan sumber di bawah klaim [Sumber: Judul](URL). Struktur: Pendahuluan, Pro/Kontra, Sintesis, Kesimpulan.`); setResponse(text); } 
+        try { 
+          // BUG FIX: ANTI-HALLUCINATION PROMPT & INLINE CITATION FORCING
+          const sys = `Anda adalah Profesor Riset Senior. Tulis tinjauan pustaka akademik MENDALAM.
+ATURAN MUTLAK:
+1. WAJIB menggunakan Google Search untuk memvalidasi argumen.
+2. DILARANG KERAS membuat bagian "Daftar Pustaka" atau menumpuk URL di akhir teks.
+3. Setiap kalimat klaim WAJIB memiliki sumber yang diletakkan LANGSUNG di bawah paragraf tersebut. Format: [Sumber: Judul Berita/Jurnal](URL Asli).
+4. DILARANG KERAS MENGARANG URL (HALUSINASI 404). Gunakan hanya tautan asli hasil pencarian. Jika tidak ada tautan pasti, sebutkan nama medianya saja tanpa kurung URL.
+Struktur: Pendahuluan, Pro/Kontra, Sintesis, Kesimpulan.`;
+          
+          const { text } = await executeAIEngine(query, sys); setResponse(text); 
+        } 
         catch (err) { (err.status === 401 || err.status === 403) ? (onError(err.message, "error"), onOpenSettings()) : onError(`Gagal: ${err.message}`, "error"); } finally { setLoading(false); }
       };
+
       return (
         <div className="w-full flex flex-col flex-1">
-          <form onSubmit={handleResearch} className="relative w-full mb-10 shrink-0"><div className="flex items-center bg-[#0a1526]/80 border border-blue-400/20 rounded-[2.5rem] p-2 h-[72px]"><div className="pl-5 pr-3 hidden md:block"><Icons.Search className="w-7 h-7 text-blue-400/70" /></div><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik Riset..." className="flex-1 h-full bg-transparent border-none outline-none text-white px-5 text-lg" /><button type="submit" disabled={loading || !query.trim()} className="shrink-0 bg-white text-black px-8 h-full rounded-[2rem] font-bold disabled:opacity-50">{loading ? 'Menyusun...' : 'Sintesis'}</button></div></form>
+          <form onSubmit={handleResearch} className="relative w-full mb-10 shrink-0"><div className="flex items-center bg-[#0a1526]/80 border border-blue-400/20 rounded-[2.5rem] p-2 h-[72px]"><div className="pl-5 pr-3 hidden md:block"><Icons.Search className="w-7 h-7 text-blue-400/70" /></div><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik Riset (contoh: Efek inflasi pada UMKM)..." className="flex-1 h-full bg-transparent border-none outline-none text-white px-5 text-lg" /><button type="submit" disabled={loading || !query.trim()} className="shrink-0 bg-blue-600 hover:bg-blue-500 text-white px-8 h-full rounded-[2rem] font-bold disabled:opacity-50 transition-colors">{loading ? 'Menyusun...' : 'Sintesis AI'}</button></div></form>
           {loading && <div className="space-y-6 animate-pulse bg-[#0a1526]/60 p-10 rounded-[3rem]"><div className="h-6 bg-blue-500/20 rounded-full w-2/4"></div><div className="h-4 bg-blue-500/10 rounded-full w-full"></div></div>}
           {response && !loading && (
-            <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all ${isExpanded ? 'min-h-[50vh]' : 'max-h-[85vh] overflow-hidden'}`}><div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center"><span className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black uppercase">Hasil</span><div className="flex space-x-2"><button onClick={() => setIsExpanded(!isExpanded)} className="p-3 bg-blue-500/10 text-blue-400 rounded-full">{isExpanded ? <Icons.Collapse className="w-5 h-5"/> : <Icons.Expand className="w-5 h-5"/>}</button><button onClick={() => copyToClipboard(response, () => onError("Disalin.", "success"))} className="p-3 bg-blue-500/10 text-blue-400 rounded-full"><Icons.Copy className="w-5 h-5"/></button></div></div><div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar'}`}><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{ __html: parseMarkdownToHTML(response) }} /></div></div>
+            <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all ${isExpanded ? 'min-h-[50vh]' : 'max-h-[85vh] overflow-hidden'}`}><div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center"><span className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black uppercase">Hasil Riset</span><div className="flex space-x-2"><button onClick={() => setIsExpanded(!isExpanded)} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors">{isExpanded ? <Icons.Collapse className="w-5 h-5"/> : <Icons.Expand className="w-5 h-5"/>}</button><button onClick={() => copyToClipboard(response, () => onError("Disalin.", "success"))} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors"><Icons.Copy className="w-5 h-5"/></button></div></div><div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar'}`}><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{ __html: parseMarkdownToHTML(response) }} /></div></div>
           )}
         </div>
       );
@@ -233,7 +245,7 @@
       };
       return (
         <div className="w-full">
-          <div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-6 mb-12"><form onSubmit={searchJournals} className="flex flex-col lg:flex-row gap-5 lg:items-end w-full"><div className="flex-1 relative"><label className="block text-[11px] font-bold text-slate-500 uppercase mb-3">Kata Kunci Literasi</label><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik..." className="w-full h-[64px] bg-[#050a14]/80 border border-white/10 rounded-[1.5rem] px-5 text-white" /></div><div className="w-full lg:w-72"><CustomSelect label="Filter Tahun" options={[{value:'all', label:'Semua'}, {value:'2024', label:'2024+'}, {value:'2022', label:'2022+'}]} value={year} onChange={setYear} allowManual={true} /></div><div className="w-full lg:w-auto"><button type="submit" disabled={loading || !query.trim()} className="w-full h-[64px] bg-blue-600 text-white px-10 rounded-[1.5rem] font-bold disabled:opacity-50">{loading ? 'Mencari...' : 'Cari'}</button></div></form></div>
+          <div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-6 mb-12"><form onSubmit={searchJournals} className="flex flex-col lg:flex-row gap-5 lg:items-end w-full"><div className="flex-1 relative"><label className="block text-[11px] font-bold text-slate-500 uppercase mb-3">Kata Kunci Literasi</label><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik..." className="w-full h-[64px] bg-[#050a14]/80 border border-white/10 rounded-[1.5rem] px-5 text-white outline-none focus:border-blue-500" /></div><div className="w-full lg:w-72"><CustomSelect label="Filter Tahun" options={[{value:'all', label:'Semua'}, {value:'2024', label:'2024+'}, {value:'2022', label:'2022+'}]} value={year} onChange={setYear} allowManual={true} /></div><div className="w-full lg:w-auto"><button type="submit" disabled={loading || !query.trim()} className="w-full h-[64px] bg-blue-600 hover:bg-blue-500 text-white px-10 rounded-[1.5rem] font-bold disabled:opacity-50 transition-colors">{loading ? 'Mencari...' : 'Cari'}</button></div></form></div>
           {!loading && results.length > 0 && (<div className="space-y-4">{results.map((paper, idx) => (<div key={idx} className="bg-[#0a1526]/80 border border-blue-500/20 rounded-[2rem] p-6 flex flex-col sm:flex-row justify-between"><div className="flex-1"><h4 className="text-xl font-semibold text-white">{paper.title || "Unknown"}</h4><div className="mt-4 flex gap-3"><span className="px-3 py-1 bg-blue-500/10 rounded-lg text-xs font-bold text-blue-300">{paper.publication_year}</span><span className="text-xs font-bold text-amber-300 bg-amber-500/10 px-3 py-1 rounded-lg">Sitasi: {paper.cited_by_count || 0}</span></div></div>{paper.doi && (<a href={paper.doi} target="_blank" className="w-12 h-12 bg-blue-500/10 border border-blue-500/20 text-blue-400 rounded-2xl flex justify-center items-center hover:bg-blue-600 hover:text-white transition-colors"><Icons.ExternalLink className="w-5 h-5" /></a>)}</div>))}</div>)}
         </div>
       );
@@ -271,10 +283,10 @@
           )}
           {data && (
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-              <div className="xl:col-span-1 space-y-6"><div className="bg-[#0a1526]/90 border border-blue-500/20 rounded-[2.5rem] p-8"><CustomSelect label="Pilih Variabel" options={data.numericColumns.map(c=>({value:c,label:c}))} value={selectedCol} onChange={setSelectedCol} /><button onClick={()=>setData(null)} className="mt-6 w-full min-h-[64px] py-4 bg-red-500/10 text-red-400 rounded-[2rem] font-bold hover:bg-red-500/20 flex justify-center items-center">Tutup Data</button></div></div>
+              <div className="xl:col-span-1 space-y-6"><div className="bg-[#0a1526]/90 border border-blue-500/20 rounded-[2.5rem] p-8"><CustomSelect label="Pilih Variabel" options={data.numericColumns.map(c=>({value:c,label:c}))} value={selectedCol} onChange={setSelectedCol} /><button onClick={()=>setData(null)} className="mt-6 w-full min-h-[64px] py-4 bg-red-500/10 text-red-400 rounded-[2rem] font-bold hover:bg-red-500/20 flex justify-center items-center transition-colors">Tutup Data</button></div></div>
               <div className="xl:col-span-2 space-y-8">
-                {stats && (<div className="bg-[#0a1526] border border-blue-500/20 rounded-[2.5rem] p-8"><div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-bold text-white">Metrik Tendensi</h3><button onClick={runAI} disabled={loading} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-[2rem] font-bold min-h-[64px] flex items-center justify-center disabled:opacity-50">{loading?'Sintesis...':'Tanya AI'}</button></div><div className="grid grid-cols-2 sm:grid-cols-4 gap-4"><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">N (SAMPEL)</p><p className="text-2xl font-bold text-white">{stats.n}</p></div><div className="bg-blue-600 p-4 rounded-xl"><p className="text-xs text-blue-200">MEAN</p><p className="text-2xl font-bold text-white">{stats.mean}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">MEDIAN</p><p className="text-2xl font-bold text-white">{stats.median}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">STD DEV</p><p className="text-2xl font-bold text-white">{stats.stdDev}</p></div></div></div>)}
-                {aiResp && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 max-h-[70vh] overflow-y-auto custom-scrollbar"><div className="flex justify-between items-center mb-6"><span className="bg-blue-600 text-white px-4 py-1.5 rounded-full text-xs font-bold uppercase">Sintesis AI</span><button onClick={()=>setAiResp(null)} className="text-red-400"><Icons.Trash className="w-5 h-5"/></button></div><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiResp.text)}}/></div>)}
+                {stats && (<div className="bg-[#0a1526] border border-blue-500/20 rounded-[2.5rem] p-8"><div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-bold text-white">Metrik Tendensi</h3><button onClick={runAI} disabled={loading} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-[2rem] font-bold min-h-[64px] flex items-center justify-center disabled:opacity-50 transition-colors">{loading?'Sintesis...':'Tanya AI'}</button></div><div className="grid grid-cols-2 sm:grid-cols-4 gap-4"><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">N (SAMPEL)</p><p className="text-2xl font-bold text-white">{stats.n}</p></div><div className="bg-blue-600 p-4 rounded-xl"><p className="text-xs text-blue-200">MEAN</p><p className="text-2xl font-bold text-white">{stats.mean}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">MEDIAN</p><p className="text-2xl font-bold text-white">{stats.median}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">STD DEV</p><p className="text-2xl font-bold text-white">{stats.stdDev}</p></div></div></div>)}
+                {aiResp && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 max-h-[70vh] overflow-y-auto custom-scrollbar"><div className="flex justify-between items-center mb-6"><span className="bg-blue-600 text-white px-4 py-1.5 rounded-full text-xs font-bold uppercase">Sintesis AI</span><button onClick={()=>setAiResp(null)} className="text-red-400 hover:text-red-300 transition-colors"><Icons.Trash className="w-5 h-5"/></button></div><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiResp.text)}}/></div>)}
               </div>
             </div>
           )}
@@ -288,6 +300,7 @@
       const [searchQuery, setSearchQuery] = useState(''); const [aiAnswer, setAiAnswer] = useState(''); 
       const [loading, setLoading] = useState(false); const [fileName, setFileName] = useState('');
       const [suggestions, setSuggestions] = useState([]); const [isMining, setIsMining] = useState(false);
+      const [isExpanded, setIsExpanded] = useState(false); // UI BUG FIX: Toggle Result Box
 
       const generateKeywords = async (fullText) => {
          setIsMining(true);
@@ -300,7 +313,7 @@
       };
 
       const handleFile = async (e) => {
-        const file = e.target.files[0]; if(!file) return; setFileName(file.name); setFileState('loading'); setSuggestions([]); setAiAnswer(''); setSearchQuery('');
+        const file = e.target.files[0]; if(!file) return; setFileName(file.name); setFileState('loading'); setSuggestions([]); setAiAnswer(''); setSearchQuery(''); setIsExpanded(false);
         try {
           const ext = file.name.split('.').pop().toLowerCase(); let parsed = []; let textRaw = "";
           if (ext === 'pdf') { const pdfjs = await loadPdfJs(); const doc = await pdfjs.getDocument(await file.arrayBuffer()).promise; for(let i=1; i<=Math.min(doc.numPages, 100); i++){ const t = (await (await doc.getPage(i)).getTextContent()).items.map(t=>t.str).join(' '); parsed.push({page:i, text: t}); textRaw += t + " ";} }
@@ -315,14 +328,14 @@
         const finalQuery = typeof queryParam === 'string' ? queryParam : searchQuery;
         if(typeof queryParam === 'string') setSearchQuery(queryParam); 
         if(!finalQuery.trim()) return; 
-        setLoading(true); setAiAnswer('');
+        setLoading(true); setAiAnswer(''); setIsExpanded(false);
         try { const ctx = extractedText.slice(0, 15).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); setAiAnswer((await executeAIEngine(finalQuery, `Jawab MURNI berdasarkan dokumen. Beri referensi (Hal X).`, ctx)).text); }
         catch(err) { (err.status===401||err.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : setAiAnswer(err.message); } finally { setLoading(false); }
       };
 
       const runExaminerMode = async () => {
         if(extractedText.length === 0) return;
-        setLoading(true); setAiAnswer('');
+        setLoading(true); setAiAnswer(''); setIsExpanded(false);
         try { 
           const ctx = extractedText.slice(0, 15).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); 
           const sys = `Anda Profesor Penguji Sidang Akademik. TUGAS MUTLAK:
@@ -359,19 +372,32 @@ Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI.`;
 
                 <form onSubmit={runSearch} className="flex flex-col gap-4">
                   <input type="text" value={searchQuery} onChange={(e)=>setSearchQuery(e.target.value)} placeholder="Tanya AI tentang isi dokumen ini secara manual..." className="w-full min-h-[64px] py-4 bg-[#050a14]/80 border border-white/10 rounded-[2rem] px-6 text-white text-lg outline-none focus:border-blue-500 shadow-inner" />
-                  
-                  {/* FIX: FORCED MIN HEIGHT DAN PADDING UNTUK MENCEGAH GEPENG DI MOBILE */}
                   <div className="flex flex-col sm:flex-row gap-4 mt-2">
-                    <button type="submit" disabled={!searchQuery||loading} className="flex-1 min-h-[64px] py-4 px-6 bg-blue-600 hover:bg-blue-500 rounded-[2rem] font-bold text-white transition-colors disabled:opacity-50 flex items-center justify-center shadow-lg text-center">
-                      Tanya AI
-                    </button>
-                    <button type="button" onClick={runExaminerMode} disabled={loading} className="flex-1 min-h-[64px] py-4 px-6 bg-red-900/20 hover:bg-red-900/40 border border-red-500/30 rounded-[2rem] font-bold text-red-300 transition-colors disabled:opacity-50 flex items-center justify-center shadow-lg text-center">
-                       <Icons.Target className="w-5 h-5 mr-2 shrink-0" /> Uji Kritis (Mode Penguji)
-                    </button>
+                    <button type="submit" disabled={!searchQuery||loading} className="flex-1 min-h-[64px] py-4 px-6 bg-blue-600 hover:bg-blue-500 rounded-[2rem] font-bold text-white transition-colors disabled:opacity-50 flex items-center justify-center shadow-lg text-center">Tanya AI</button>
+                    <button type="button" onClick={runExaminerMode} disabled={loading} className="flex-1 min-h-[64px] py-4 px-6 bg-red-900/20 hover:bg-red-900/40 border border-red-500/30 rounded-[2rem] font-bold text-red-300 transition-colors disabled:opacity-50 flex items-center justify-center shadow-lg text-center"><Icons.Target className="w-5 h-5 mr-2 shrink-0" /> Uji Kritis (Mode Penguji)</button>
                   </div>
                 </form>
               </div>
-              {aiAnswer && (<div className="bg-[#0a1526]/80 p-8 rounded-[3rem] border border-blue-400/20 max-h-[70vh] overflow-y-auto custom-scrollbar"><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiAnswer)}}/></div>)}
+              
+              {/* BUG FIX UI: SINKRONISASI EXPAND/COLLAPSE DI PEMINDAI */}
+              {aiAnswer && (
+                <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all ${isExpanded ? 'min-h-[50vh]' : 'max-h-[70vh] overflow-hidden'}`}>
+                  <div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center">
+                     <span className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black uppercase">Hasil Analisis AI</span>
+                     <div className="flex space-x-2">
+                       <button onClick={() => setIsExpanded(!isExpanded)} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors">
+                         {isExpanded ? <Icons.Collapse className="w-5 h-5"/> : <Icons.Expand className="w-5 h-5"/>}
+                       </button>
+                       <button onClick={() => copyToClipboard(aiAnswer, () => onError("Teks disalin!", "success"))} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors">
+                         <Icons.Copy className="w-5 h-5"/>
+                       </button>
+                     </div>
+                  </div>
+                  <div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar flex-1'}`}>
+                     <div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiAnswer)}}/>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -409,7 +435,7 @@ Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI.`;
           <div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 mb-12">
             <h3 className="text-2xl font-bold text-white mb-2">Laboratorium Diksi (PDF)</h3>
             <p className="text-sm text-slate-400 mb-6">Unggah PDF. AI akan membuang Daftar Pustaka/Isi otomatis lalu memparafrase isinya untuk lolos Turnitin.</p>
-            <div className="mb-6"><label className="bg-blue-600/20 text-blue-300 border border-blue-500/30 px-6 py-3 rounded-2xl text-sm font-bold cursor-pointer inline-flex items-center hover:bg-blue-600/40"><Icons.Upload className="w-5 h-5 mr-2" />{isExtracting ? 'Mengekstrak AI...' : 'Unggah PDF/DOCX'}<input type="file" accept=".pdf,.docx,.txt" onChange={handleFileUpload} className="hidden" disabled={isExtracting} /></label></div>
+            <div className="mb-6"><label className="bg-blue-600/20 text-blue-300 border border-blue-500/30 px-6 py-3 rounded-2xl text-sm font-bold cursor-pointer inline-flex items-center hover:bg-blue-600/40 transition-colors"><Icons.Upload className="w-5 h-5 mr-2" />{isExtracting ? 'Mengekstrak AI...' : 'Unggah PDF/DOCX'}<input type="file" accept=".pdf,.docx,.txt" onChange={handleFileUpload} className="hidden" disabled={isExtracting} /></label></div>
             <form onSubmit={runRefiner} className="flex flex-col gap-5"><textarea value={rawText} onChange={(e)=>setRawText(e.target.value)} placeholder="Atau paste draf skripsi langsung..." className="w-full min-h-[250px] bg-[#050a14]/80 border border-white/10 rounded-2xl p-6 text-white custom-scrollbar outline-none focus:border-blue-500"></textarea><button type="submit" disabled={loading||!rawText||isExtracting} className="self-end bg-blue-600 hover:bg-blue-500 text-white px-10 min-h-[64px] py-4 rounded-2xl font-bold disabled:opacity-50 transition-colors">{loading?'Memproses...':'Eksekusi Parafrase'}</button></form>
           </div>
           {refinedText && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 max-h-[70vh] overflow-y-auto custom-scrollbar"><div className="flex justify-between items-center mb-6"><h3 className="text-xl font-bold text-white">Hasil Parafrase</h3><button onClick={()=>copyToClipboard(refinedText,()=>onError("Teks disalin!","success"))} className="p-3 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-full transition-colors"><Icons.Copy className="w-5 h-5"/></button></div><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html:parseMarkdownToHTML(refinedText)}}/></div>)}
