@@ -87,21 +87,21 @@
       return { n, mean: mean.toFixed(3), median: median.toFixed(3), min: sorted[0], max: sorted[n - 1], variance: variance.toFixed(3), stdDev: Math.sqrt(variance).toFixed(3) };
     };
 
-    // BUG FIX ABSOLUT: CSV Parser Anti-Empty Columns
+    // BUG FIX ABSOLUT: Hardened CSV Parser Anti-Empty/BOM
     const parseCSV = (text) => {
       const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
       if (lines.length < 2) return null;
+      
       const firstLine = lines[0];
       const delimiter = firstLine.includes(';') ? ';' : (firstLine.includes('\t') ? '\t' : ',');
       
-      // Jika header kotor atau kosong, paksa berikan nama "Kolom_X"
       const headers = firstLine.split(delimiter).map((h, i) => {
-          let clean = h.trim().replace(/^"|"$/g, '').replace(/[\u200B-\u200D\uFEFF]/g, '');
-          return clean ? clean : `Kolom_Tak_Bernama_${i+1}`;
+          let clean = h.replace(/^"|"$/g, '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+          return clean ? clean : `Kolom_${i+1}`; 
       });
       
       const rows = lines.slice(1).map(line => {
-        const values = line.split(delimiter).map(v => v.trim().replace(/^"|"$/g, ''));
+        const values = line.split(delimiter).map(v => v.replace(/^"|"$/g, '').trim());
         return headers.reduce((obj, header, i) => { obj[header] = values[i] || ''; return obj; }, {});
       });
       return { headers, rows };
@@ -122,16 +122,15 @@
     const executeAIEngine = async (prompt, systemPrompt, customContext = "") => {
       const localKey = safeStorage.get('nexus_api_key');
       
-      // BUG FIX ABSOLUT: Hanya Gunakan Model 2.0 Flash Terbaru untuk Menghindari Error 404
+      // BUG FIX ABSOLUT: Menghapus -latest untuk kompatibilitas penuh semua region & kunci
       const modelsToTry = [
           { name: "gemini-2.0-flash", useSearch: true },
-          { name: "gemini-1.5-flash-latest", useSearch: false },
-          { name: "gemini-pro", useSearch: false }
+          { name: "gemini-1.5-flash", useSearch: false }
       ];
 
       let lastError = null;
       const dateContext = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-      const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan ini sebagai acuan absolut.]\n\n`;
+      const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan ini sebagai acuan absolut untuk merespons.]\n\n`;
       const fullSystemPrompt = temporalInstruction + systemPrompt;
 
       const safeContext = customContext ? customContext.substring(0, 30000) : ""; 
@@ -149,7 +148,7 @@
              return { text, sources: data.candidates?.[0]?.groundingMetadata?.groundingAttributions?.map(a => ({ uri: a.web?.uri, title: a.web?.title })) || [] };
          } catch (err) { lastError = err; if (err.status === 401 || err.status === 403) { const e = new Error("HTTP 401: API Key Ditolak."); e.status = err.status; throw e; } }
       }
-      throw new Error(lastError?.message.includes("400") ? "Batasan Sistem: Teks terlalu panjang." : `Gagal: ${lastError?.message || 'Model tidak didukung oleh kunci API Anda'}`); 
+      throw new Error(lastError?.message.includes("400") ? "Batasan Sistem: Teks terlalu panjang." : `Gagal: ${lastError?.message || 'Model tidak didukung'}`); 
     };
 
     // --- DYNAMIC LOADERS ---
@@ -270,8 +269,7 @@ Struktur: Pendahuluan, Pro/Kontra, Sintesis, Kesimpulan.`;
       const processData = (csvText) => {
         try {
           const parsed = parseCSV(csvText); if (!parsed) throw new Error("Format CSV/TXT rusak.");
-          
-          // Memastikan hanya mengambil kolom yang memiliki nilai valid di 10 baris pertama
+          // Cek mana kolom yang valid (minimal ada angka di baris awalnya)
           const numCols = parsed.headers.filter(h => h && h.trim() !== '' && parsed.rows.slice(0, 10).some(r => !isNaN(parseFloat(r[h]))));
           if(!numCols.length) throw new Error("Gagal menemukan kolom angka. Pastikan file valid.");
           setData({ ...parsed, numericColumns: numCols }); setSelectedCol(numCols[0]);
@@ -458,7 +456,7 @@ Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI.`;
 
     // --- MAIN APP ---
     function NexusApp() {
-      const [activeTab, setActiveTab] = useState('ai'); 
+      const [activeTab, setActiveTab] = useState('data'); 
       const [toast, setToast] = useState({ visible: false, message: '', type: 'error' });
       const [isSettingsOpen, setIsSettingsOpen] = useState(false);
       const triggerToast = (m, t = 'error') => setToast({ visible: true, message: m, type: t });
