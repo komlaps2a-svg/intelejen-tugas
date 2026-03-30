@@ -87,15 +87,22 @@
       return { n, mean: mean.toFixed(3), median: median.toFixed(3), min: sorted[0], max: sorted[n - 1], variance: variance.toFixed(3), stdDev: Math.sqrt(variance).toFixed(3) };
     };
 
+    // BUG FIX ABSOLUT: CSV Parser Anti-Empty Columns
     const parseCSV = (text) => {
       const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
       if (lines.length < 2) return null;
       const firstLine = lines[0];
       const delimiter = firstLine.includes(';') ? ';' : (firstLine.includes('\t') ? '\t' : ',');
-      const headers = firstLine.split(delimiter).map(h => h.trim().replace(/^"|"$/g, ''));
+      
+      // Jika header kotor atau kosong, paksa berikan nama "Kolom_X"
+      const headers = firstLine.split(delimiter).map((h, i) => {
+          let clean = h.trim().replace(/^"|"$/g, '').replace(/[\u200B-\u200D\uFEFF]/g, '');
+          return clean ? clean : `Kolom_Tak_Bernama_${i+1}`;
+      });
+      
       const rows = lines.slice(1).map(line => {
         const values = line.split(delimiter).map(v => v.trim().replace(/^"|"$/g, ''));
-        return headers.reduce((obj, header, i) => { obj[header] = values[i]; return obj; }, {});
+        return headers.reduce((obj, header, i) => { obj[header] = values[i] || ''; return obj; }, {});
       });
       return { headers, rows };
     };
@@ -114,11 +121,17 @@
     // --- AI ENGINE ---
     const executeAIEngine = async (prompt, systemPrompt, customContext = "") => {
       const localKey = safeStorage.get('nexus_api_key');
-      const modelsToTry = localKey.trim() === "" ? [ { name: "gemini-2.5-flash-preview-09-2025", useSearch: true } ] : [ { name: "gemini-2.5-flash", useSearch: true }, { name: "gemini-1.5-flash", useSearch: false } ];
-      let lastError = null;
       
+      // BUG FIX ABSOLUT: Hanya Gunakan Model 2.0 Flash Terbaru untuk Menghindari Error 404
+      const modelsToTry = [
+          { name: "gemini-2.0-flash", useSearch: true },
+          { name: "gemini-1.5-flash-latest", useSearch: false },
+          { name: "gemini-pro", useSearch: false }
+      ];
+
+      let lastError = null;
       const dateContext = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-      const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan ini sebagai acuan absolut untuk mengkalkulasi waktu, usia, maupun merespons dokumen.]\n\n`;
+      const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan ini sebagai acuan absolut.]\n\n`;
       const fullSystemPrompt = temporalInstruction + systemPrompt;
 
       const safeContext = customContext ? customContext.substring(0, 30000) : ""; 
@@ -136,7 +149,7 @@
              return { text, sources: data.candidates?.[0]?.groundingMetadata?.groundingAttributions?.map(a => ({ uri: a.web?.uri, title: a.web?.title })) || [] };
          } catch (err) { lastError = err; if (err.status === 401 || err.status === 403) { const e = new Error("HTTP 401: API Key Ditolak."); e.status = err.status; throw e; } }
       }
-      throw new Error(lastError?.message.includes("400") ? "Batasan Sistem: Teks terlalu panjang." : `Gagal: ${lastError?.message || 'Koneksi terputus'}`); 
+      throw new Error(lastError?.message.includes("400") ? "Batasan Sistem: Teks terlalu panjang." : `Gagal: ${lastError?.message || 'Model tidak didukung oleh kunci API Anda'}`); 
     };
 
     // --- DYNAMIC LOADERS ---
@@ -210,7 +223,6 @@
       const handleResearch = async (e) => {
         e.preventDefault(); if (!query.trim()) return; setLoading(true); setIsExpanded(false);
         try { 
-          // BUG FIX: ANTI-HALLUCINATION PROMPT & INLINE CITATION FORCING
           const sys = `Anda adalah Profesor Riset Senior. Tulis tinjauan pustaka akademik MENDALAM.
 ATURAN MUTLAK:
 1. WAJIB menggunakan Google Search untuk memvalidasi argumen.
@@ -258,6 +270,8 @@ Struktur: Pendahuluan, Pro/Kontra, Sintesis, Kesimpulan.`;
       const processData = (csvText) => {
         try {
           const parsed = parseCSV(csvText); if (!parsed) throw new Error("Format CSV/TXT rusak.");
+          
+          // Memastikan hanya mengambil kolom yang memiliki nilai valid di 10 baris pertama
           const numCols = parsed.headers.filter(h => h && h.trim() !== '' && parsed.rows.slice(0, 10).some(r => !isNaN(parseFloat(r[h]))));
           if(!numCols.length) throw new Error("Gagal menemukan kolom angka. Pastikan file valid.");
           setData({ ...parsed, numericColumns: numCols }); setSelectedCol(numCols[0]);
@@ -278,7 +292,7 @@ Struktur: Pendahuluan, Pro/Kontra, Sintesis, Kesimpulan.`;
           {!data && (
             <div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-10 flex flex-col items-center">
               <Icons.Database className="w-16 h-16 text-blue-400 mb-6" /><h3 className="text-2xl font-bold text-white mb-6">Injeksi CSV/Excel Data</h3>
-              <label className="w-full max-w-md bg-blue-600 hover:bg-blue-500 text-white h-[64px] rounded-2xl flex justify-center items-center font-bold cursor-pointer transition-colors">Unggah File CSV <input type="file" accept=".csv,.txt" onChange={handleFile} className="hidden" /></label>
+              <label className="w-full max-w-md bg-blue-600 hover:bg-blue-500 text-white min-h-[64px] py-4 rounded-[2rem] flex justify-center items-center font-bold cursor-pointer transition-colors">Unggah File CSV <input type="file" accept=".csv,.txt" onChange={handleFile} className="hidden" /></label>
             </div>
           )}
           {data && (
@@ -300,7 +314,7 @@ Struktur: Pendahuluan, Pro/Kontra, Sintesis, Kesimpulan.`;
       const [searchQuery, setSearchQuery] = useState(''); const [aiAnswer, setAiAnswer] = useState(''); 
       const [loading, setLoading] = useState(false); const [fileName, setFileName] = useState('');
       const [suggestions, setSuggestions] = useState([]); const [isMining, setIsMining] = useState(false);
-      const [isExpanded, setIsExpanded] = useState(false); // UI BUG FIX: Toggle Result Box
+      const [isExpanded, setIsExpanded] = useState(false);
 
       const generateKeywords = async (fullText) => {
          setIsMining(true);
@@ -379,7 +393,6 @@ Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI.`;
                 </form>
               </div>
               
-              {/* BUG FIX UI: SINKRONISASI EXPAND/COLLAPSE DI PEMINDAI */}
               {aiAnswer && (
                 <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all ${isExpanded ? 'min-h-[50vh]' : 'max-h-[70vh] overflow-hidden'}`}>
                   <div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center">
@@ -445,7 +458,7 @@ Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI.`;
 
     // --- MAIN APP ---
     function NexusApp() {
-      const [activeTab, setActiveTab] = useState('scanner'); 
+      const [activeTab, setActiveTab] = useState('ai'); 
       const [toast, setToast] = useState({ visible: false, message: '', type: 'error' });
       const [isSettingsOpen, setIsSettingsOpen] = useState(false);
       const triggerToast = (m, t = 'error') => setToast({ visible: true, message: m, type: t });
