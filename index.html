@@ -109,7 +109,7 @@
     const stripMarkdown = (md) => md ? md.replace(/#{1,6}\s+/g, '').replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/`{1,3}(.*?)`{1,3}/g, '$1').replace(/\n\s*\n/g, '\n\n') : '';
     const copyToClipboard = (text, onSuccess) => { const t = document.createElement("textarea"); t.value = stripMarkdown(text); t.style.position = "fixed"; t.style.left = "-9999px"; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); if (onSuccess) onSuccess(); } catch (err) {} document.body.removeChild(t); };
 
-    // --- HTML PARSER (FIXED: BREAK-WORDS UNTUK MENCEGAH UI HANCUR KARENA URL PANJANG) ---
+    // --- HTML PARSER (FIXED: PROFESSIONAL INLINE CITATION BADGE) ---
     const parseMarkdownToHTML = (md) => {
         if (!md) return '';
         
@@ -117,8 +117,8 @@
             return text
                 .replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-bold">$1</strong>')
                 .replace(/\*(.*?)\*/g, '<em class="text-slate-300 italic">$1</em>')
-                // Regex diperkuat: Berhenti persis di kurung tutup pertama untuk mencegah kebocoran parsing
-                .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="text-blue-400 hover:text-blue-300 hover:underline mx-1 bg-blue-500/10 px-1.5 py-0.5 rounded text-[0.9em] transition-colors inline-flex items-center break-all"><svg class="w-3 h-3 mr-1 opacity-70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"></path></svg><span class="break-words max-w-full">$1</span></a>');
+                // REGEX DIUBAH: Render link Markdown menjadi Tombol Badge elegan ala Jurnal (Inline)
+                .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" class="inline-flex items-center px-2 py-0.5 mx-1 mb-1 text-[11px] font-bold text-blue-100 bg-blue-600/30 border border-blue-500/40 hover:bg-blue-600 hover:text-white rounded-md transition-all shadow-sm align-middle no-underline"><svg class="w-3 h-3 mr-1 opacity-70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"></path></svg><span class="truncate max-w-[200px] inline-block align-bottom">$1</span></a>');
         };
 
         const blocks = md.split(/\n\s*\n/);
@@ -154,12 +154,11 @@
                 return `<ol class="mb-6 ml-6 list-decimal marker:text-blue-500 text-slate-300 font-bold"><span class="font-normal">${listHtml}</span></ol>`;
             }
 
-            // Mencegah kebocoran teks menghancurkan div container
             return `<p class="mb-5 leading-relaxed text-slate-300 text-[1.05rem] text-justify break-words">${formatInline(block).replace(/\n/g, '<br/>')}</p>`;
         }).join('');
     };
 
-    // --- AI ENGINE (UPDATED: MAX TOKENS 8192 & ANTI-REDIRECT URL) ---
+    // --- AI ENGINE (UPDATED: PROMPT BAJAKAN GROUNDING URL & GROK GUARD) ---
     const executeAIEngine = async (prompt, systemPrompt, customContext = "") => {
       const localKey = safeStorage.get('nexus_api_key');
       const grokKey = safeStorage.get('nexus_grok_key');
@@ -173,8 +172,7 @@
       const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan acuan mutlak. DILARANG berasumsi ini tahun 2023 atau 2024.]\n\n`;
       const fullSystemPrompt = temporalInstruction + systemPrompt;
 
-      // Memaksa mesin mencari sumber yang valid
-      const searchBias = " Fokuskan riset pada jurnal (Sinta/Scopus) atau institusi kredibel.";
+      const searchBias = " Untuk pencarian web, PRIORITASKAN jurnal (Sinta/Scopus) atau institusi kredibel.";
       const finalPrompt = customContext ? `[KONTEKS LOKAL]:\n${safeContext}\n\n[INSTRUKSI]:\n${prompt}` : prompt + searchBias;
 
       // STEP 1: GEMINI CALL
@@ -184,10 +182,7 @@
              const payload = { 
                  contents: [{ parts: [{ text: finalPrompt }] }], 
                  systemInstruction: { parts: [{ text: fullSystemPrompt }] }, 
-                 generationConfig: { 
-                     temperature: 0.4,
-                     maxOutputTokens: 8192 // MEMAKSA AI MENGELUARKAN TEKS PANJANG TANPA TERPOTONG
-                 } 
+                 generationConfig: { temperature: 0.5, maxOutputTokens: 8192 } 
              };
              if (config.useSearch && !customContext) payload.tools = [{ google_search: {} }];
              const res = await fetchWithBackoff(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -211,13 +206,12 @@
 
       if (!finalDraft) throw new Error(lastError?.message.includes("400") ? "Batasan Sistem: Teks terlalu panjang." : `Gagal: ${lastError?.message || 'Koneksi terputus'}`); 
 
-      // STEP 2: GROK COLLABORATION
+      // STEP 2: GROK COLLABORATION (STRICT URL PRESERVATION)
       if (grokKey && grokKey.trim() !== "") {
           try {
               const grokPrompt = fullSystemPrompt + `\n\n[INSTRUKSI MUTLAK GROK]: 
-              1. DILARANG KERAS MERINGKAS. Draf akhir harus LEBIH PANJANG dari aslinya. Selesaikan semua 5 Bab.
-              2. PERTAHANKAN SEMUA SITASI (Penulis, Tahun). 
-              3. Jika ada URL panjang yang merusak format (seperti vertexaisearch), PERBAIKI atau GANTI dengan nama lembaganya saja. Jangan biarkan URL berantakan.`;
+              1. DILARANG KERAS MERINGKAS. Draf akhir harus SAMA PANJANG atau LEBIH PANJANG dari aslinya.
+              2. PERTAHANKAN SEMUA FORMAT SITASI MARKDOWN [Penulis, Tahun](https://...). JANGAN sentuh, ubah, atau hapus link tersebut. Link tersebut adalah nyawa dokumen ini.`;
               
               const grokRes = await fetch("https://api.x.ai/v1/chat/completions", {
                   method: "POST",
@@ -226,7 +220,7 @@
                       model: "grok-beta",
                       messages: [
                           { role: "system", content: grokPrompt },
-                          { role: "user", content: `Perdalam dan PERPANJANG analisis draf ini. Pastikan tidak ada link yang merusak teks:\n\n${finalDraft}` }
+                          { role: "user", content: `Perdalam analisis draf ini. Pastikan link Markdown [Teks](https://...) tetap utuh dan jangan diringkas:\n\n${finalDraft}` }
                       ],
                       temperature: 0.3
                   })
@@ -311,28 +305,27 @@
       );
     }
 
-    // --- MODUL 1: AI RESEARCHER (ANTI BLEED & 5-PILLAR) ---
+    // --- MODUL 1: AI RESEARCHER (HARD-FORCED RAW URLS & 5-PILLAR) ---
     function AIResearcherModule({ onError, onOpenSettings }) {
       const [query, setQuery] = useState(''); const [loading, setLoading] = useState(false); const [response, setResponse] = useState(null); const [isExpanded, setIsExpanded] = useState(false); 
       
       const handleResearch = async (e) => {
         e.preventDefault(); if (!query.trim()) return; setLoading(true); setIsExpanded(false); setResponse(null);
         try { 
-            // INJEKSI PENCEGAHAN ANOMALI & STRUKTUR 5 BAB
-            const sysPrompt = `Anda adalah Profesor Riset Pragmatis. TUGAS MUTLAK: Tulis tinjauan pustaka akademik SANGAT PANJANG, MENDALAM, berstandar jurnal ilmiah.
+            // INJEKSI PEMBAJAKAN SISTEM GROUNDING & KERANGKA
+            const sysPrompt = `Anda adalah Profesor Riset Senior pragmatis. TUGAS MUTLAK: Tulis tinjauan pustaka akademik PANJANG dan KOMPREHENSIF.
             
-            ATURAN URL & SITASI (WAJIB DILAKUKAN DEMI MENCEGAH CRASH):
-            1. DILARANG KERAS menggunakan link redirect panjang (seperti vertexaisearch atau google.com/url). Jika Anda hanya mendapat link panjang/rusak, JANGAN cantumkan URL-nya, cukup tulis nama lembaganya saja.
-            2. Jika URL valid dan bersih (contoh: https://jurnal.ac.id/...), sertakan langsung di dalam paragraf menggunakan format: [Nama Penulis, Tahun](URL).
+            ATURAN URL & SITASI (BYPASS SISTEM GROUNDING ANDA):
+            1. PENTING: Anda dilarang membiarkan sistem menyembunyikan URL! Anda WAJIB mengetik URL asli secara MENTAH dan EKSPLISIT ke dalam teks menggunakan format Markdown: \`[Nama Penulis, Tahun](https://www.url-asli.com)\`.
+            2. Jika Anda hanya merangkum nama [Penulis, Tahun] tanpa mengetikkan \`(https://...)\` di belakangnya, Anda telah gagal mematuhi instruksi.
+            3. DILARANG KERAS membuat Daftar Pustaka di bawah teks. Semua URL wajib terintegrasi sebagai *inline citation badge* di setiap paragraf.
             
-            STRUKTUR 5 BAB (DILARANG MELEWATI SATU BAB PUN. TULIS SAMPAI SELESAI):
-            1. Pendahuluan & Konteks: Latar belakang masalah yang sangat detail.
-            2. Pembahasan & Analisis Kritis: Bedah variabel atau data pendukung.
-            3. Komparasi: Pro dan Kontra: Tulis argumen yang mendukung VS yang menentang.
-            4. Solusi & Rekomendasi Pragmatis: Langkah-langkah penyelesaian nyata.
-            5. Kesimpulan: Sintesis penutup.
-
-            Pastikan analisis panjang, minimal 1500 kata. JANGAN PERNAH berhenti di tengah jalan.`;
+            STRUKTUR 5 BAB (DILARANG MENGHILANGKAN SATU PUN):
+            1. Pendahuluan & Konteks: Latar belakang mendalam.
+            2. Pembahasan & Analisis Kritis: Bedah variabel (gunakan poin-poin/list).
+            3. Komparasi: Pro dan Kontra: Argumen pendukung VS risiko.
+            4. Solusi & Rekomendasi Nyata: Langkah-langkah penyelesaian.
+            5. Kesimpulan: Sintesis akhir.`;
             
             const resData = await executeAIEngine(query, sysPrompt); 
             setResponse(resData); 
@@ -342,7 +335,7 @@
 
       return (
         <div className="w-full flex flex-col flex-1">
-          <form onSubmit={handleResearch} className="relative w-full mb-10 shrink-0"><div className="flex items-center bg-[#0a1526]/80 border border-blue-400/20 rounded-[2.5rem] p-2 h-[72px]"><div className="pl-5 pr-3 hidden md:block"><Icons.Search className="w-7 h-7 text-blue-400/70" /></div><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik Riset Akademik (Mendalam)..." className="flex-1 h-full bg-transparent border-none outline-none text-white px-5 text-lg" /><button type="submit" disabled={loading || !query.trim()} className="shrink-0 bg-white text-black px-8 h-full rounded-[2rem] font-bold disabled:opacity-50 hover:bg-slate-200 transition-colors">{loading ? 'Menganalisis...' : 'Sintesis Data'}</button></div></form>
+          <form onSubmit={handleResearch} className="relative w-full mb-10 shrink-0"><div className="flex items-center bg-[#0a1526]/80 border border-blue-400/20 rounded-[2.5rem] p-2 h-[72px]"><div className="pl-5 pr-3 hidden md:block"><Icons.Search className="w-7 h-7 text-blue-400/70" /></div><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik Riset Akademik (Mendalam)..." className="flex-1 h-full bg-transparent border-none outline-none text-white px-5 text-lg" /><button type="submit" disabled={loading || !query.trim()} className="shrink-0 bg-white text-black px-8 h-full rounded-[2rem] font-bold disabled:opacity-50 hover:bg-slate-200 transition-colors">{loading ? 'Menyusun Riset...' : 'Sintesis Data'}</button></div></form>
           {loading && <div className="space-y-6 animate-pulse bg-[#0a1526]/60 p-10 rounded-[3rem] border border-blue-500/10"><div className="h-6 bg-blue-500/20 rounded-full w-2/4"></div><div className="h-4 bg-blue-500/10 rounded-full w-full"></div><div className="h-4 bg-blue-500/10 rounded-full w-full"></div><div className="h-4 bg-blue-500/10 rounded-full w-5/6"></div><div className="pt-4"><div className="h-4 bg-blue-500/10 rounded-full w-1/3 mb-2"></div><div className="h-4 bg-blue-500/10 rounded-full w-1/4"></div></div></div>}
           
           {response && !loading && (
@@ -356,11 +349,12 @@
                 </div>
                 
                 <div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar'}`}>
+                    {/* PARSER AKAN MERENDER LINK MENJADI BADGE */}
                     <div className="prose prose-invert max-w-none mb-8" dangerouslySetInnerHTML={{ __html: parseMarkdownToHTML(response.text) }} />
                     
                     {response.sources && response.sources.length > 0 && (
                         <div className="mt-8 pt-6 border-t border-blue-500/20">
-                            <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4 flex items-center"><Icons.Database className="w-4 h-4 mr-2 text-blue-400" /> Database Referensi Induk</h4>
+                            <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4 flex items-center"><Icons.Database className="w-4 h-4 mr-2 text-blue-400" /> Database Referensi Internal</h4>
                             <div className="flex flex-wrap gap-2">
                                 {response.sources.map((src, idx) => (
                                     <a key={idx} href={src.uri} target="_blank" className="bg-[#050a14]/80 hover:bg-blue-900/40 border border-blue-500/20 text-blue-300 text-[11px] px-4 py-2 rounded-xl flex items-center transition-all shadow-sm break-all max-w-full">
