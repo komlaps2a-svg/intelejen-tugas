@@ -109,7 +109,7 @@
     const stripMarkdown = (md) => md ? md.replace(/#{1,6}\s+/g, '').replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/`{1,3}(.*?)`{1,3}/g, '$1').replace(/\n\s*\n/g, '\n\n') : '';
     const copyToClipboard = (text, onSuccess) => { const t = document.createElement("textarea"); t.value = stripMarkdown(text); t.style.position = "fixed"; t.style.left = "-9999px"; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); if (onSuccess) onSuccess(); } catch (err) {} document.body.removeChild(t); };
 
-    // --- HTML PARSER (INLINE LINKS & BULLET POINTS) ---
+    // --- HTML PARSER ---
     const parseMarkdownToHTML = (md) => {
         if (!md) return '';
         
@@ -157,7 +157,7 @@
         }).join('');
     };
 
-    // --- AI ENGINE (UPDATED: ANTI-TRUNCATION PROMPT) ---
+    // --- AI ENGINE (UPDATED: APA CITATION & STRICT GROK GUARD) ---
     const executeAIEngine = async (prompt, systemPrompt, customContext = "") => {
       const localKey = safeStorage.get('nexus_api_key');
       const grokKey = safeStorage.get('nexus_grok_key');
@@ -171,8 +171,9 @@
       const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan acuan mutlak. DILARANG berasumsi ini tahun 2023 atau 2024.]\n\n`;
       const fullSystemPrompt = temporalInstruction + systemPrompt;
 
-      const safeContext = customContext ? customContext.substring(0, 30000) : ""; 
-      const finalPrompt = customContext ? `[KONTEKS LOKAL]:\n${safeContext}\n\n[INSTRUKSI/PERTANYAAN]:\n${prompt}` : prompt;
+      // Injeksi bias pencarian khusus jika menggunakan Search
+      const searchBias = " Untuk pencarian web, PRIORITASKAN mencari pada situs akademik (site:.ac.id, site:.edu), jurnal terindeks (Sinta, Scopus, ScienceDirect, Elsevier), dan lembaga riset terpercaya. Hindari blog pribadi.";
+      const finalPrompt = customContext ? `[KONTEKS LOKAL]:\n${safeContext}\n\n[INSTRUKSI]:\n${prompt}` : prompt + searchBias;
 
       // STEP 1: GEMINI CALL
       for (const config of modelsToTry) {
@@ -181,7 +182,7 @@
              const payload = { 
                  contents: [{ parts: [{ text: finalPrompt }] }], 
                  systemInstruction: { parts: [{ text: fullSystemPrompt }] }, 
-                 generationConfig: { temperature: 0.5 } // Dinaikkan ke 0.5 agar lebih cerewet dan panjang
+                 generationConfig: { temperature: 0.5 } // Suhu sedang untuk keseimbangan kreativitas (panjang teks) dan presisi (sitasi)
              };
              if (config.useSearch && !customContext) payload.tools = [{ google_search: {} }];
              const res = await fetchWithBackoff(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -205,11 +206,15 @@
 
       if (!finalDraft) throw new Error(lastError?.message.includes("400") ? "Batasan Sistem: Teks terlalu panjang." : `Gagal: ${lastError?.message || 'Koneksi terputus'}`); 
 
-      // STEP 2: GROK COLLABORATION (STRICT ANTI-TRUNCATION)
+      // STEP 2: GROK COLLABORATION (STRICT ANTI-TRUNCATION & APA PRESERVATION)
       if (grokKey && grokKey.trim() !== "") {
           try {
-              // INJEKSI LARANGAN MEMOTONG TEKS UNTUK GROK
-              const grokPrompt = fullSystemPrompt + "\n\n[INSTRUKSI KOLABORASI GROK (MUTLAK)]: Anda mengevaluasi draf AI sebelumnya. DILARANG KERAS MEMOTONG ATAU MERINGKAS TEKS. Hasil akhir Anda WAJIB sama panjang atau LEBIH PANJANG dari draf awal. Elaborasi setiap poin lebih dalam. PERTAHANKAN SEMUA STRUKTUR (Pendahuluan, Pro/Kontra, Kesimpulan) dan TAUTAN INLINE. Jika Anda memotong teks ini, Anda gagal sepenuhnya.";
+              const grokPrompt = fullSystemPrompt + `\n\n[INSTRUKSI KOLABORASI GROK (MUTLAK)]: Anda adalah Penguji Sidang Akademik. Evaluasi draf AI sebelumnya. 
+              ATURAN HIDUP-MATI:
+              1. DILARANG KERAS MEMOTONG ATAU MERINGKAS TEKS. Hasil akhir Anda WAJIB sama panjang atau LEBIH PANJANG dari draf awal. Elaborasi setiap poin (Pendahuluan, Analisis, Pro/Kontra, Solusi, Kesimpulan) menjadi sangat mendalam.
+              2. PERTAHANKAN SEMUA SITASI INLINE berformat [Penulis, Tahun](URL). Jangan hapus URL satupun.
+              3. Buat nada bahasa menjadi sangat analitis, pragmatis, dan membumi (tanpa basa-basi).`;
+              
               const grokRes = await fetch("https://api.x.ai/v1/chat/completions", {
                   method: "POST",
                   headers: { "Content-Type": "application/json", "Authorization": `Bearer ${grokKey}` },
@@ -217,7 +222,7 @@
                       model: "grok-beta",
                       messages: [
                           { role: "system", content: grokPrompt },
-                          { role: "user", content: `Evaluasi, pertajam, dan PERPANJANG draf ini secara akademis (Jangan berani-berani meringkasnya):\n\n${finalDraft}` }
+                          { role: "user", content: `Perbaiki, pertajam logika, dan PERPANJANG draf ini secara akademis (Jangan diringkas, pastikan 5 bab dan sitasi inline APA tetap utuh):\n\n${finalDraft}` }
                       ],
                       temperature: 0.3
                   })
@@ -232,10 +237,6 @@
 
       return { text: finalDraft, sources: finalSources };
     };
-
-    // --- DYNAMIC LOADERS ---
-    const loadPdfJs = async () => { if (window.pdfjsLib) return window.pdfjsLib; return new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'; s.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; res(window.pdfjsLib); }; s.onerror = () => rej(new Error("Gagal muat PDF.js")); document.head.appendChild(s); }); };
-    const loadMammothJs = async () => { if (window.mammoth) return window.mammoth; return new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js'; s.onload = () => res(window.mammoth); s.onerror = () => rej(new Error("Gagal muat mammoth.js")); document.head.appendChild(s); }); };
 
     // --- UI COMPONENTS ---
     function Toast({ message, isVisible, onClose, type = 'error' }) {
@@ -306,26 +307,30 @@
       );
     }
 
-    // --- MODUL 1: AI RESEARCHER (FIXED LENGTH, STRUCTURE & LINKS) ---
+    // --- MODUL 1: AI RESEARCHER (FORCED 5-PILLAR STRUCTURE & APA) ---
     function AIResearcherModule({ onError, onOpenSettings }) {
       const [query, setQuery] = useState(''); const [loading, setLoading] = useState(false); const [response, setResponse] = useState(null); const [isExpanded, setIsExpanded] = useState(false); 
       
       const handleResearch = async (e) => {
         e.preventDefault(); if (!query.trim()) return; setLoading(true); setIsExpanded(false); setResponse(null);
         try { 
-            // INJEKSI PANJANG MINIMAL 1500 KATA & STRUKTUR ABSOLUT
-            const sysPrompt = `Anda adalah Profesor Riset Pragmatis. TUGAS: Tulis tinjauan pustaka akademik SANGAT PANJANG, MENDALAM, dan KOMPREHENSIF berstandar jurnal Q1.
-            ATURAN FORMAT MUTLAK:
-            1. KUANTITAS: Tulisan WAJIB terdiri dari minimal 1000 hingga 1500 kata. Dilarang keras menjawab singkat.
-            2. STRUKTUR WAJIB (Gunakan Heading Markdown):
-               - 1. Pendahuluan (Latar belakang komprehensif)
-               - 2. Analisis Mendalam (Gunakan bullet points untuk membedah argumen)
-               - 3. Komparasi: Pro dan Kontra
-               - 4. Sintesis & Implikasi
-               - 5. Kesimpulan
-            3. SITASI IN-TEXT (INLINE): Setiap data, angka, atau klaim kuat WAJIB menyematkan tautan langsung di dalam kalimat. Format: [Teks Kutipan Tepat di Sini](URL Asli dari Google Search).
-            4. DILARANG MERANGKUM URL DI AKHIR. Semua URL wajib terintegrasi di paragraf bersangkutan. Jangan buat segmen "Daftar Referensi".
-            5. GAYA BAHASA: Akademis murni, padat, tanpa basa-basi.`;
+            // INJEKSI KERANGKA ABSOLUT & SITASI APA
+            const sysPrompt = `Anda adalah Profesor Riset Senior pragmatis. TUGAS MUTLAK: Tulis tinjauan pustaka akademik SANGAT PANJANG (Minimum 1500 kata).
+            
+            ATURAN SUMBER & SITASI (WAJIB DILAKUKAN):
+            1. PENCARIAN MUTU TINGGI: Anda wajib memprioritaskan situs jurnal (Sinta, Scopus), universitas (.ac.id, .edu), atau jurnal institusi resmi.
+            2. SITASI APA INLINE: Setiap kali Anda memberikan fakta, data, atau argumen pihak ketiga, WAJIB mengutipnya dengan gaya APA yang terintegrasi hyperlink. Format Mutlak: [Nama Penulis/Institusi, Tahun](URL Asli). Contoh: ...hal ini berdampak masif ([Kemenkeu RI, 2024](https://...)).
+            3. DILARANG KERAS membuat Daftar Pustaka di paling bawah. Jadikan SEMUA tautan Anda inline di setiap paragraf.
+            
+            STRUKTUR 5 BAB (DILARANG MENGHILANGKAN SATU PUN):
+            Gunakan Heading Markdown (# atau ##) untuk:
+            1. Pendahuluan & Konteks: Jabarkan latar belakang masalah secara sangat detail.
+            2. Pembahasan & Analisis Kritis: Bedah variabel atau data pendukung. Gunakan poin/bullet point jika mendata sesuatu.
+            3. Komparasi: Pro dan Kontra: Tulis argumen pihak yang mendukung VS pihak yang menentang/risiko.
+            4. Solusi & Rekomendasi Nyata: Langkah-langkah pragmatis untuk menyelesaikan/menghadapi isu tersebut.
+            5. Kesimpulan: Sintesis penutup.
+
+            PENTING: Jangan meringkas. Bedah setiap bab dengan paragraf yang panjang dan padat argumen.`;
             
             const resData = await executeAIEngine(query, sysPrompt); 
             setResponse(resData); 
@@ -335,13 +340,13 @@
 
       return (
         <div className="w-full flex flex-col flex-1">
-          <form onSubmit={handleResearch} className="relative w-full mb-10 shrink-0"><div className="flex items-center bg-[#0a1526]/80 border border-blue-400/20 rounded-[2.5rem] p-2 h-[72px]"><div className="pl-5 pr-3 hidden md:block"><Icons.Search className="w-7 h-7 text-blue-400/70" /></div><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik Riset Akademik..." className="flex-1 h-full bg-transparent border-none outline-none text-white px-5 text-lg" /><button type="submit" disabled={loading || !query.trim()} className="shrink-0 bg-white text-black px-8 h-full rounded-[2rem] font-bold disabled:opacity-50 hover:bg-slate-200 transition-colors">{loading ? 'Menyusun...' : 'Sintesis'}</button></div></form>
+          <form onSubmit={handleResearch} className="relative w-full mb-10 shrink-0"><div className="flex items-center bg-[#0a1526]/80 border border-blue-400/20 rounded-[2.5rem] p-2 h-[72px]"><div className="pl-5 pr-3 hidden md:block"><Icons.Search className="w-7 h-7 text-blue-400/70" /></div><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik Riset Akademik (Mendalam)..." className="flex-1 h-full bg-transparent border-none outline-none text-white px-5 text-lg" /><button type="submit" disabled={loading || !query.trim()} className="shrink-0 bg-white text-black px-8 h-full rounded-[2rem] font-bold disabled:opacity-50 hover:bg-slate-200 transition-colors">{loading ? 'Menyusun Riset...' : 'Sintesis Data'}</button></div></form>
           {loading && <div className="space-y-6 animate-pulse bg-[#0a1526]/60 p-10 rounded-[3rem] border border-blue-500/10"><div className="h-6 bg-blue-500/20 rounded-full w-2/4"></div><div className="h-4 bg-blue-500/10 rounded-full w-full"></div><div className="h-4 bg-blue-500/10 rounded-full w-full"></div><div className="h-4 bg-blue-500/10 rounded-full w-5/6"></div><div className="pt-4"><div className="h-4 bg-blue-500/10 rounded-full w-1/3 mb-2"></div><div className="h-4 bg-blue-500/10 rounded-full w-1/4"></div></div></div>}
           
           {response && !loading && (
             <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all shadow-2xl ${isExpanded ? 'min-h-[50vh]' : 'max-h-[85vh] overflow-hidden'}`}>
                 <div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center bg-[#050a14]/50 rounded-t-[3rem]">
-                    <span className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black uppercase tracking-wider">Hasil Riset Komprehensif</span>
+                    <span className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black uppercase tracking-wider">Laporan Riset (Struktur 5 Bab)</span>
                     <div className="flex space-x-2">
                         <button onClick={() => setIsExpanded(!isExpanded)} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors shadow-inner">{isExpanded ? <Icons.Collapse className="w-5 h-5"/> : <Icons.Expand className="w-5 h-5"/>}</button>
                         <button onClick={() => copyToClipboard(response.text, () => onError("Disalin.", "success"))} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors shadow-inner"><Icons.Copy className="w-5 h-5"/></button>
@@ -353,7 +358,7 @@
                     
                     {response.sources && response.sources.length > 0 && (
                         <div className="mt-8 pt-6 border-t border-blue-500/20">
-                            <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4 flex items-center"><Icons.Database className="w-4 h-4 mr-2 text-blue-400" /> Database Referensi Induk (Anti-Halusinasi)</h4>
+                            <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4 flex items-center"><Icons.Database className="w-4 h-4 mr-2 text-blue-400" /> Grounding Data (Sumber Tervalidasi Search)</h4>
                             <div className="flex flex-wrap gap-2">
                                 {response.sources.map((src, idx) => (
                                     <a key={idx} href={src.uri} target="_blank" className="bg-[#050a14]/80 hover:bg-blue-900/40 border border-blue-500/20 text-blue-300 text-[11px] px-4 py-2 rounded-xl flex items-center transition-all shadow-sm">
