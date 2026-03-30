@@ -113,7 +113,7 @@
     const stripMarkdown = (md) => md ? md.replace(/#{1,6}\s+/g, '').replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/`{1,3}(.*?)`{1,3}/g, '$1').replace(/\n\s*\n/g, '\n\n') : '';
     const copyToClipboard = (text, onSuccess) => { const t = document.createElement("textarea"); t.value = stripMarkdown(text); t.style.position = "fixed"; t.style.left = "-9999px"; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); if (onSuccess) onSuccess(); } catch (err) {} document.body.removeChild(t); };
 
-    // --- HTML PARSER (FIXED: PERMISSIVE REGEX FOR CITATION BADGE) ---
+    // --- HTML PARSER (INLINE BADGE) ---
     const parseMarkdownToHTML = (md) => {
         if (!md) return '';
         
@@ -121,7 +121,6 @@
             return text
                 .replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-bold">$1</strong>')
                 .replace(/\*(.*?)\*/g, '<em class="text-slate-300 italic">$1</em>')
-                // Regex ditoleransi (\s*) untuk menangkap spasi yang sering tak sengaja dibuat LLM
                 .replace(/\[([^\]]+)\]\s*\(([^)]+)\)/g, '<a href="$2" target="_blank" class="inline-flex items-center px-2 py-0.5 mx-1 mb-1 text-[11px] font-bold text-blue-100 bg-blue-600/30 border border-blue-500/40 hover:bg-blue-600 hover:text-white rounded-md transition-all shadow-sm align-middle no-underline break-all"><svg class="w-3 h-3 mr-1 opacity-70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"></path></svg><span class="break-words max-w-[200px] truncate inline-block align-bottom">$1</span></a>');
         };
 
@@ -162,8 +161,8 @@
         }).join('');
     };
 
-    // --- AI ENGINE ---
-    const executeAIEngine = async (prompt, systemPrompt, customContext = "") => {
+    // --- AI ENGINE (DYNAMIC GROK OVERRIDE) ---
+    const executeAIEngine = async (prompt, systemPrompt, customContext = "", grokOverridePrompt = null, customTemp = 0.4) => {
       const localKey = safeStorage.get('nexus_api_key');
       const grokKey = safeStorage.get('nexus_grok_key');
       
@@ -173,12 +172,10 @@
       let finalSources = []; 
       
       const dateContext = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-      const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan acuan mutlak. DILARANG berasumsi ini tahun 2023 atau 2024.]\n\n`;
+      const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan acuan mutlak.]\n\n`;
       const fullSystemPrompt = temporalInstruction + systemPrompt;
 
-      // INJEKSI ANCAMAN: Memaksa mesin menulis Markdown Link, bukan teks biasa.
-      const strictWarning = "\n\n[PERINGATAN MUTLAK]: 1. WAJIB tulis panjang 1500 kata. 2. Setiap klaim/fakta WAJIB disitasi di tengah kalimat dengan format MARKDOWN KLIKABEL `[Penulis, Tahun](URL)`. JANGAN menulis sitasi teks mati seperti `(Penulis, Tahun)`.";
-      const finalPrompt = customContext ? `[KONTEKS LOKAL]:\n${safeContext}\n\n[INSTRUKSI]:\n${prompt}` : prompt + strictWarning;
+      const finalPrompt = customContext ? `[KONTEKS LOKAL]:\n${customContext}\n\n[INSTRUKSI]:\n${prompt}` : prompt;
 
       // STEP 1: GEMINI CALL
       for (const config of modelsToTry) {
@@ -187,7 +184,7 @@
              const payload = { 
                  contents: [{ parts: [{ text: finalPrompt }] }], 
                  systemInstruction: { parts: [{ text: fullSystemPrompt }] }, 
-                 generationConfig: { temperature: 0.4, maxOutputTokens: 8192 } 
+                 generationConfig: { temperature: customTemp, maxOutputTokens: 8192 } 
              };
              if (config.useSearch && !customContext) payload.tools = [{ google_search: {} }];
              const res = await fetchWithBackoff(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -201,7 +198,7 @@
                     .filter(a => a.uri);
              }
              
-             if (!finalDraft) throw new Error("Respons diblokir filter Google. Coba topik lain.");
+             if (!finalDraft) throw new Error("Respons diblokir filter Google.");
              break;
          } catch (err) { 
              lastError = err; 
@@ -211,13 +208,11 @@
 
       if (!finalDraft) throw new Error(lastError?.message.includes("400") ? "Batasan Sistem: Teks terlalu panjang." : `Gagal: ${lastError?.message || 'Koneksi terputus'}`); 
 
-      // STEP 2: GROK COLLABORATION
+      // STEP 2: GROK COLLABORATION (ISOLATED INSTRUCTIONS)
       if (grokKey && grokKey.trim() !== "") {
           try {
-              const grokPrompt = fullSystemPrompt + `\n\n[INSTRUKSI MUTLAK GROK]: 
-              1. DILARANG KERAS MERINGKAS. Draf akhir harus LEBIH PANJANG dari aslinya. Selesaikan semua 5 Bab.
-              2. PERTAHANKAN SEMUA SITASI (Penulis, Tahun). 
-              3. PERTAHANKAN format Markdown Link [Teks](URL).`;
+              const baseGrokInstruction = grokOverridePrompt || `Evaluasi dan rapikan draf ini secara presisi. Jangan menghapus informasi penting.`;
+              const grokPrompt = fullSystemPrompt + `\n\n[INSTRUKSI MUTLAK GROK]:\n${baseGrokInstruction}`;
               
               const grokRes = await fetch("https://api.x.ai/v1/chat/completions", {
                   method: "POST",
@@ -226,9 +221,9 @@
                       model: "grok-beta",
                       messages: [
                           { role: "system", content: grokPrompt },
-                          { role: "user", content: `Perdalam dan PERPANJANG analisis draf ini. Pastikan link markdown tetap utuh:\n\n${finalDraft}` }
+                          { role: "user", content: `Evaluasi draf ini:\n\n${finalDraft}` }
                       ],
-                      temperature: 0.3
+                      temperature: 0.2
                   })
               });
               
@@ -311,27 +306,35 @@
       );
     }
 
-    // --- MODUL 1: AI RESEARCHER ---
+    // --- MODUL 1: AI RESEARCHER (HIBRIDA CITATION & 5-PILLAR FORCED) ---
     function AIResearcherModule({ onError, onOpenSettings }) {
       const [query, setQuery] = useState(''); const [loading, setLoading] = useState(false); const [response, setResponse] = useState(null); const [isExpanded, setIsExpanded] = useState(false); 
       
       const handleResearch = async (e) => {
         e.preventDefault(); if (!query.trim()) return; setLoading(true); setIsExpanded(false); setResponse(null);
         try { 
-            const sysPrompt = `Anda adalah Profesor Riset Pragmatis. TUGAS MUTLAK: Tulis tinjauan pustaka akademik SANGAT PANJANG, MENDALAM, berstandar jurnal ilmiah.
+            const sysPrompt = `Anda adalah Profesor Riset Senior pragmatis. TUGAS MUTLAK: Tulis tinjauan pustaka akademik PANJANG, MENDALAM (Minimum 1500 kata).
             
-            ATURAN URL & SITASI:
-            1. DILARANG KERAS menggunakan link redirect panjang (seperti vertexaisearch atau google.com/url). Jika Anda hanya mendapat link panjang/rusak, cukup tulis nama lembaganya saja.
-            2. WAJIB menggunakan format [Penulis, Tahun](URL) agar bisa diklik.
+            ATURAN SITASI ANTI-HALUSINASI (BACA DENGAN TELITI):
+            1. Jika Anda MENDAPATKAN URL ASLI dari pencarian web (jurnal, web resmi), gunakan format Markdown Klikabel HANYA di tengah kalimat: \`[Nama Penulis/Lembaga, Tahun](URL ASLI)\`.
+            2. SANGAT KRITIKAL: Jika Anda TIDAK TAHU URL aslinya (misalnya referensi buku cetak/teori umum seperti Kasmir, 2012), DILARANG KERAS MENGARANG URL. Gunakan teks biasa saja: \`(Penulis, Tahun)\` tanpa link. Jangan gunakan format \`[Teks]\` tanpa URL yang valid.
+            3. DILARANG KERAS menggunakan link redirect Google/Vertex.
+            4. DILARANG membuat Daftar Pustaka di paling bawah.
             
-            STRUKTUR 5 BAB (DILARANG MELEWATI SATU BAB PUN. TULIS SAMPAI SELESAI):
+            STRUKTUR 5 BAB (DILARANG MENGHILANGKAN SATU PUN):
             1. Pendahuluan & Konteks.
-            2. Pembahasan & Analisis Kritis.
+            2. Pembahasan & Analisis Kritis (Bedah dengan data).
             3. Komparasi: Pro dan Kontra.
-            4. Solusi & Rekomendasi Pragmatis.
+            4. Solusi & Rekomendasi Nyata.
             5. Kesimpulan.`;
             
-            const resData = await executeAIEngine(query, sysPrompt); 
+            const grokInstruction = `1. DILARANG KERAS MERINGKAS. Draf akhir WAJIB SAMA PANJANG ATAU LEBIH PANJANG (minimal 5 bab penuh). 
+            2. PERTAHANKAN SEMUA TAUTAN URL \`[Teks](URL)\` ATAU TEKS BIASA \`(Penulis, Tahun)\`. Jangan merusak syntax link tersebut.`;
+
+            // Kirim query dengan bias pencarian untuk mendapatkan jurnal sungguhan
+            const finalQuery = query + " Fokus pencarian pada jurnal terakreditasi, Sinta, Scopus, .ac.id, atau institusi riset resmi.";
+            
+            const resData = await executeAIEngine(finalQuery, sysPrompt, "", grokInstruction, 0.5); 
             setResponse(resData); 
         } 
         catch (err) { (err.status === 401 || err.status === 403) ? (onError(err.message, "error"), onOpenSettings()) : onError(`Gagal: ${err.message}`, "error"); } finally { setLoading(false); }
@@ -339,7 +342,7 @@
 
       return (
         <div className="w-full flex flex-col flex-1">
-          <form onSubmit={handleResearch} className="relative w-full mb-10 shrink-0"><div className="flex items-center bg-[#0a1526]/80 border border-blue-400/20 rounded-[2.5rem] p-2 h-[72px]"><div className="pl-5 pr-3 hidden md:block"><Icons.Search className="w-7 h-7 text-blue-400/70" /></div><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik Riset Akademik (Mendalam)..." className="flex-1 h-full bg-transparent border-none outline-none text-white px-5 text-lg" /><button type="submit" disabled={loading || !query.trim()} className="shrink-0 bg-white text-black px-8 h-full rounded-[2rem] font-bold disabled:opacity-50 hover:bg-slate-200 transition-colors">{loading ? 'Menganalisis...' : 'Sintesis Data'}</button></div></form>
+          <form onSubmit={handleResearch} className="relative w-full mb-10 shrink-0"><div className="flex items-center bg-[#0a1526]/80 border border-blue-400/20 rounded-[2.5rem] p-2 h-[72px]"><div className="pl-5 pr-3 hidden md:block"><Icons.Search className="w-7 h-7 text-blue-400/70" /></div><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik Riset Akademik (Mendalam)..." className="flex-1 h-full bg-transparent border-none outline-none text-white px-5 text-lg" /><button type="submit" disabled={loading || !query.trim()} className="shrink-0 bg-white text-black px-8 h-full rounded-[2rem] font-bold disabled:opacity-50 hover:bg-slate-200 transition-colors">{loading ? 'Menyusun Riset...' : 'Sintesis Data'}</button></div></form>
           {loading && <div className="space-y-6 animate-pulse bg-[#0a1526]/60 p-10 rounded-[3rem] border border-blue-500/10"><div className="h-6 bg-blue-500/20 rounded-full w-2/4"></div><div className="h-4 bg-blue-500/10 rounded-full w-full"></div><div className="h-4 bg-blue-500/10 rounded-full w-full"></div><div className="h-4 bg-blue-500/10 rounded-full w-5/6"></div><div className="pt-4"><div className="h-4 bg-blue-500/10 rounded-full w-1/3 mb-2"></div><div className="h-4 bg-blue-500/10 rounded-full w-1/4"></div></div></div>}
           
           {response && !loading && (
@@ -353,11 +356,12 @@
                 </div>
                 
                 <div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar'}`}>
+                    {/* PARSER AKAN MERENDER LINK MENJADI BADGE */}
                     <div className="prose prose-invert max-w-none mb-8" dangerouslySetInnerHTML={{ __html: parseMarkdownToHTML(response.text) }} />
                     
                     {response.sources && response.sources.length > 0 && (
                         <div className="mt-8 pt-6 border-t border-blue-500/20">
-                            <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4 flex items-center"><Icons.Database className="w-4 h-4 mr-2 text-blue-400" /> Database Referensi Induk</h4>
+                            <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-4 flex items-center"><Icons.Database className="w-4 h-4 mr-2 text-blue-400" /> Database Referensi Internal</h4>
                             <div className="flex flex-wrap gap-2">
                                 {response.sources.map((src, idx) => (
                                     <a key={idx} href={src.uri} target="_blank" className="bg-[#050a14]/80 hover:bg-blue-900/40 border border-blue-500/20 text-blue-300 text-[11px] px-4 py-2 rounded-xl flex items-center transition-all shadow-sm break-all max-w-full">
@@ -408,7 +412,10 @@
       
       const runAI = async () => {
         if(!stats) return; setLoading(true); setIsExpanded(false);
-        try { setAiResp(await executeAIEngine(`Analisis: ${selectedCol}`, `Anda Analis Data. Variabel="${selectedCol}". N=${stats.n}, Mean=${stats.mean}, SD=${stats.stdDev}. Beri narasi implikasi data ini secara mendalam.`)); }
+        try { 
+            const grokInst = `DILARANG MERINGKAS. Elaborasi secara mendalam temuan data ini.`;
+            setAiResp(await executeAIEngine(`Analisis: ${selectedCol}`, `Anda Analis Data. Variabel="${selectedCol}". N=${stats.n}, Mean=${stats.mean}, SD=${stats.stdDev}. Beri narasi implikasi data ini secara mendalam.`, "", grokInst, 0.4)); 
+        }
         catch (e) { (e.status===401||e.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : onError(e.message, "error"); } finally { setLoading(false); }
       };
 
@@ -446,7 +453,7 @@
       );
     }
 
-    // --- MODUL 4: DOCUMENT SCANNER ---
+    // --- MODUL 4: DOCUMENT SCANNER (FIXED: ISOLATED KEYWORD ENGINE) ---
     function DocumentScannerModule({ onError, onOpenSettings }) {
       const [fileState, setFileState] = useState(null); const [extractedText, setExtractedText] = useState([]); 
       const [searchQuery, setSearchQuery] = useState(''); const [aiAnswer, setAiAnswer] = useState(''); 
@@ -457,8 +464,10 @@
       const generateKeywords = async (fullText) => {
          setIsMining(true);
          try {
-             const sys = `TUGAS: Ekstrak persis 4 frasa kata kunci utama dari dokumen ini. Pisahkan HANYA dengan tanda koma.`;
-             const res = await executeAIEngine("Ekstrak kata kunci", sys, fullText.substring(0, 15000));
+             // INSTRUKSI ISOLASI: Dilarang membuat bab.
+             const sys = `TUGAS MUTLAK: Ekstrak persis 4 frasa topik/kata kunci utama dari dokumen ini. FORMAT: Kata1, Kata2, Kata3, Kata4. JANGAN MENAMBAHKAN TEKS LAIN.`;
+             const grokOverride = `Keluarkan HANYA teks berisi 4 kata kunci yang dipisahkan oleh tanda koma. Dilarang menggunakan bab atau kalimat pengantar.`;
+             const res = await executeAIEngine("Ekstrak kata kunci", sys, fullText.substring(0, 15000), grokOverride, 0.2);
              const keys = res.text.split(',').map(k => k.trim().replace(/[^a-zA-Z0-9 -]/g, '')).filter(k => k.length > 3);
              setSuggestions(keys);
          } catch(e) { console.warn("Background AI Mining failed."); } finally { setIsMining(false); }
@@ -468,7 +477,6 @@
         const file = e.target.files[0]; if(!file) return; setFileName(file.name); setFileState('loading'); setSuggestions([]); setAiAnswer(''); setSearchQuery('');
         try {
           const ext = file.name.split('.').pop().toLowerCase(); let parsed = []; let textRaw = "";
-          // FIX PENGGUNAAN STATIC SCRIPT
           if (ext === 'pdf') { const pdfjs = window.pdfjsLib; const doc = await pdfjs.getDocument(await file.arrayBuffer()).promise; for(let i=1; i<=Math.min(doc.numPages, 100); i++){ const t = (await (await doc.getPage(i)).getTextContent()).items.map(t=>t.str).join(' '); parsed.push({page:i, text: t}); textRaw += t + " ";} }
           else if (ext === 'docx') { const res = await window.mammoth.extractRawText({arrayBuffer: await file.arrayBuffer()}); textRaw = res.value; const chunks = textRaw.match(/.{1,2000}/g)||[]; chunks.forEach((c,i)=>parsed.push({page:i+1, text:c})); }
           else throw new Error("Gunakan format PDF/DOCX.");
@@ -482,7 +490,11 @@
         if(typeof queryParam === 'string') setSearchQuery(queryParam); 
         if(!finalQuery.trim()) return; 
         setLoading(true); setAiAnswer(''); setIsExpanded(false);
-        try { const ctx = extractedText.slice(0, 15).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); setAiAnswer((await executeAIEngine(finalQuery, `Jawab MURNI berdasarkan dokumen. Beri referensi (Hal X).`, ctx)).text); }
+        try { 
+            const ctx = extractedText.slice(0, 15).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); 
+            const grokInst = `Jawab MURNI berdasarkan dokumen. Beri kutipan Halaman.`;
+            setAiAnswer((await executeAIEngine(finalQuery, `Jawab berdasarkan dokumen.`, ctx, grokInst, 0.3)).text); 
+        }
         catch(err) { (err.status===401||err.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : setAiAnswer(err.message); } finally { setLoading(false); }
       };
 
@@ -491,11 +503,9 @@
         setLoading(true); setAiAnswer(''); setIsExpanded(false);
         try { 
           const ctx = extractedText.slice(0, 15).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); 
-          const sys = `Anda Profesor Penguji Sidang Akademik. TUGAS MUTLAK:
-1. Evaluasi Komprehensif Naskah (Kelebihan & Celah Riset).
-2. Simulasi 3 Pertanyaan Sidang tingkat tinggi & Pertahanan Akademisnya.
-Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI.`;
-          setAiAnswer((await executeAIEngine("Lakukan Uji Kritis Akademik pada dokumen ini.", sys, ctx)).text); 
+          const sys = `Anda Penguji Sidang. Evaluasi Kelebihan & Celah Riset, dan Simulasi 3 Pertanyaan Sidang.`;
+          const grokInst = `DILARANG MERINGKAS. Jabarkan evaluasi kritis Anda selengkap mungkin.`;
+          setAiAnswer((await executeAIEngine("Lakukan Uji Kritis pada dokumen ini.", sys, ctx, grokInst, 0.4)).text); 
         }
         catch(err) { (err.status===401||err.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : setAiAnswer(err.message); } finally { setLoading(false); }
       };
@@ -512,15 +522,23 @@ Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI.`;
                    <button onClick={()=>{setFileState(null);setAiAnswer('');setSuggestions([]);setSearchQuery('');}} className="p-3 bg-red-500/10 text-red-400 rounded-full hover:bg-red-500/20 transition-colors"><Icons.Trash className="w-5 h-5"/></button>
                 </div>
                 
-                <div className="mb-4">
-                  <span className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-2">{isMining ? 'AI Sedang Menambang Topik...' : (suggestions.length > 0 ? 'Topik Krusial Terdeteksi:' : '')}</span>
-                  <div className="flex flex-wrap gap-2">
-                     {suggestions.map((sug, i) => (
-                        <button key={i} onClick={() => runSearch(sug)} disabled={loading} className="bg-blue-500/10 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/20 text-xs px-4 py-2 rounded-xl transition-all shadow-sm font-semibold disabled:opacity-50">
-                           {sug}
-                        </button>
-                     ))}
-                  </div>
+                <div className="mb-4 min-h-[40px]">
+                  {isMining ? (
+                      <span className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-2 animate-pulse">AI Sedang Menambang Topik...</span>
+                  ) : (
+                      suggestions.length > 0 && (
+                          <>
+                              <span className="text-xs font-bold text-slate-500 uppercase tracking-widest block mb-2">Pilihan Cepat (Topik Deteksi AI):</span>
+                              <div className="flex flex-wrap gap-2">
+                                 {suggestions.map((sug, i) => (
+                                    <button key={i} onClick={() => runSearch(`Jelaskan tentang: ${sug}`)} disabled={loading} className="bg-blue-500/10 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/20 text-xs px-4 py-2 rounded-xl transition-all shadow-sm font-semibold disabled:opacity-50">
+                                       {sug}
+                                    </button>
+                                 ))}
+                              </div>
+                          </>
+                      )
+                  )}
                 </div>
 
                 <form onSubmit={runSearch} className="flex flex-col gap-4">
@@ -560,14 +578,13 @@ Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI.`;
         const file = e.target.files[0]; if(!file) return; setIsExtracting(true); setRawText('Memindai PDF dan membersihkan noise via AI... Mohon tunggu.');
         try {
           const ext = file.name.split('.').pop().toLowerCase(); let text = "";
-          // FIX PENGGUNAAN STATIC SCRIPT
           if (ext === 'pdf') { const pdfjs = window.pdfjsLib; const doc = await pdfjs.getDocument(await file.arrayBuffer()).promise; for(let i=1; i<=Math.min(doc.numPages, 30); i++) text += (await (await doc.getPage(i)).getTextContent()).items.map(t=>t.str).join(' ') + "\n"; } 
           else if (ext === 'docx') { text = (await window.mammoth.extractRawText({arrayBuffer: await file.arrayBuffer()})).value; } 
           else { text = await file.text(); }
           
           if(text.length > 500) {
-            const sys = `TUGAS MUTLAK: Hapus seluruh Daftar Isi, Daftar Pustaka, Lampiran, dan nomor halaman. Kembalikan HANYA teks inti/daging riset. DILARANG meringkas atau memparafrase.`;
-            const clean = await executeAIEngine("Filter dokumen ini", sys, text.substring(0, 30000));
+            const sys = `TUGAS MUTLAK: Hapus Daftar Isi, Daftar Pustaka, Lampiran, dan nomor halaman. Kembalikan HANYA teks daging.`;
+            const clean = await executeAIEngine("Filter dokumen ini", sys, text.substring(0, 30000), "Dilarang memotong panjang teks", 0.1);
             setRawText(clean.text); onError("Dokumen berhasil difilter.", "success");
           } else { setRawText(text); }
         } catch(err) { onError(`Gagal memproses file: ${err.message}`, "error"); setRawText(''); } finally { setIsExtracting(false); e.target.value = ''; }
@@ -575,7 +592,7 @@ Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI.`;
 
       const runRefiner = async (e) => {
         e.preventDefault(); if(!rawText) return; setLoading(true); setIsExpanded(false);
-        try { setRefinedText((await executeAIEngine(rawText, `Anda Editor Akademik. TUGAS: Parafrase SANGAT ILMIAH untuk menurunkan Plagiasi (Turnitin). JANGAN mengubah makna.`)).text); }
+        try { setRefinedText((await executeAIEngine(rawText, `Anda Editor Akademik. TUGAS: Parafrase SANGAT ILMIAH untuk lolos Turnitin. JANGAN mengubah makna.`, "", "DILARANG MERINGKAS. Pertahankan panjang teks.", 0.4)).text); }
         catch(err) { (err.status===401||err.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : onError(err.message, "error"); } finally { setLoading(false); }
       };
 
