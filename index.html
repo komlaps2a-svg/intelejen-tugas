@@ -79,8 +79,6 @@
       return ref;
     };
 
-    const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
     const calculateStats = (dataArray) => {
       const n = dataArray.length; if (n === 0) return { mean: 0, median: 0, min: 0, max: 0, variance: 0, stdDev: 0 };
       const sum = dataArray.reduce((acc, val) => acc + val, 0); const mean = sum / n; const sorted = [...dataArray].sort((a, b) => a - b); const mid = Math.floor(n / 2); const median = n % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2; const variance = dataArray.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / (n > 1 ? n - 1 : 1);
@@ -111,7 +109,7 @@
     const stripMarkdown = (md) => md ? md.replace(/#{1,6}\s+/g, '').replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/`{1,3}(.*?)`{1,3}/g, '$1').replace(/\n\s*\n/g, '\n\n') : '';
     const copyToClipboard = (text, onSuccess) => { const t = document.createElement("textarea"); t.value = stripMarkdown(text); t.style.position = "fixed"; t.style.left = "-9999px"; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); if (onSuccess) onSuccess(); } catch (err) {} document.body.removeChild(t); };
 
-    // --- AI ENGINE (UPDATED FOR GROK COLLAB) ---
+    // --- AI ENGINE (UPDATED: EXTRACT METADATA + STRICT GROK GUARD) ---
     const executeAIEngine = async (prompt, systemPrompt, customContext = "") => {
       const localKey = safeStorage.get('nexus_api_key');
       const grokKey = safeStorage.get('nexus_grok_key');
@@ -119,26 +117,39 @@
       const modelsToTry = localKey.trim() === "" ? [ { name: "gemini-2.5-flash-preview-09-2025", useSearch: true } ] : [ { name: "gemini-2.5-flash", useSearch: true }, { name: "gemini-1.5-flash", useSearch: false } ];
       let lastError = null;
       let finalDraft = "";
+      let finalSources = []; // Wajib diekstrak di luar draf teks
       
-      // INJEKSI KESADARAN TEMPORAL
       const dateContext = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-      const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan ini sebagai acuan absolut. DILARANG KERAS berasumsi ini tahun 2023 atau 2024.]\n\n`;
+      const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan acuan mutlak. DILARANG berasumsi ini tahun 2023 atau 2024.]\n\n`;
       const fullSystemPrompt = temporalInstruction + systemPrompt;
 
       const safeContext = customContext ? customContext.substring(0, 30000) : ""; 
       const finalPrompt = customContext ? `[KONTEKS LOKAL]:\n${safeContext}\n\n[INSTRUKSI/PERTANYAAN]:\n${prompt}` : prompt;
 
-      // STEP 1: GEMINI CALL (Research & Initial Draft)
+      // STEP 1: GEMINI CALL (Research & Raw Payload Extraction)
       for (const config of modelsToTry) {
          try {
              const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.name}:generateContent?key=${localKey}`;
-             const payload = { contents: [{ parts: [{ text: finalPrompt }] }], systemInstruction: { parts: [{ text: fullSystemPrompt }] }, generationConfig: { temperature: 0.3 } };
+             const payload = { 
+                 contents: [{ parts: [{ text: finalPrompt }] }], 
+                 systemInstruction: { parts: [{ text: fullSystemPrompt }] }, 
+                 generationConfig: { temperature: 0.4 } // Ditingkatkan sedikit agar tidak terlalu kaku/pendek
+             };
              if (config.useSearch && !customContext) payload.tools = [{ google_search: {} }];
              const res = await fetchWithBackoff(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
              const data = await res.json();
+             
              finalDraft = data.candidates?.[0]?.content?.parts?.[0]?.text;
+             
+             // PENARIKAN PAKSA SUMBER METADATA (Menyelesaikan masalah URL gaib)
+             if (data.candidates?.[0]?.groundingMetadata?.groundingAttributions) {
+                 finalSources = data.candidates[0].groundingMetadata.groundingAttributions
+                    .map(a => ({ uri: a.web?.uri, title: a.web?.title }))
+                    .filter(a => a.uri); // Pastikan uri tidak undefined
+             }
+             
              if (!finalDraft) throw new Error("Respons diblokir filter Google.");
-             break; // Success, exit retry loop
+             break;
          } catch (err) { 
              lastError = err; 
              if (err.status === 401 || err.status === 403) { const e = new Error("HTTP 401: API Key Gemini Ditolak."); e.status = err.status; throw e; } 
@@ -149,37 +160,35 @@
           throw new Error(lastError?.message.includes("400") ? "Batasan Sistem: Teks terlalu panjang." : `Gagal: ${lastError?.message || 'Koneksi terputus'}`); 
       }
 
-      // STEP 2: GROK COLLABORATION (Refinement & Anti-Hallucination logic)
+      // STEP 2: GROK COLLABORATION
       if (grokKey && grokKey.trim() !== "") {
           try {
+              const grokPrompt = fullSystemPrompt + "\n\n[INSTRUKSI KOLABORASI GROK (CRITICAL)]: Anda mengevaluasi draf AI sebelumnya. PERTAHANKAN PANJANG TEKS ASLI (Jangan dipotong atau dirangkum menjadi pendek). PERTAHANKAN SEMUA REFERENSI URL yang ada di teks. Tugas Anda HANYA membuat gaya bahasanya lebih brutal, akurat, analitis, dan presisi. Jangan mengubah substansi faktualnya.";
               const grokRes = await fetch("https://api.x.ai/v1/chat/completions", {
                   method: "POST",
                   headers: { "Content-Type": "application/json", "Authorization": `Bearer ${grokKey}` },
                   body: JSON.stringify({
                       model: "grok-beta",
                       messages: [
-                          { role: "system", content: fullSystemPrompt + "\n\n[INSTRUKSI KOLABORASI (GROK MODE)]: Anda adalah lapisan evaluasi logis tingkat tinggi. Tugas Anda adalah memvalidasi, menyempurnakan ketajaman argumen, dan merapikan struktur dari draf AI di bawah ini. JANGAN ubah substansi faktanya, namun buat menjadi lebih brutal, langsung, akurat, dan akademis. Pastikan referensi tetap in-line (sebaris)." },
-                          { role: "user", content: `Draf Awal untuk diperbaiki:\n\n${finalDraft}` }
+                          { role: "system", content: grokPrompt },
+                          { role: "user", content: `Evaluasi dan sempurnakan draf ini (Wajib pertahankan panjang minimal 1000 kata jika draf aslinya panjang):\n\n${finalDraft}` }
                       ],
-                      temperature: 0.2
+                      temperature: 0.3
                   })
               });
               
               if (grokRes.ok) {
                   const grokData = await grokRes.json();
                   if (grokData.choices?.[0]?.message?.content) {
-                      finalDraft = grokData.choices[0].message.content; // Override with Grok's synthesized draft
+                      finalDraft = grokData.choices[0].message.content;
                   }
-              } else {
-                  console.warn("Koneksi Grok API ditolak/gagal. Fallback ke draf Gemini murni.");
               }
           } catch(err) {
-              console.warn("Grok API error:", err.message);
-              // Silent fail for Grok to allow graceful degradation back to Gemini.
+              console.warn("Grok API error, fallback ke Gemini murni.");
           }
       }
 
-      return { text: finalDraft };
+      return { text: finalDraft, sources: finalSources }; // Wajib return object
     };
 
     // --- DYNAMIC LOADERS ---
@@ -210,7 +219,6 @@
       );
     }
 
-    // --- UPDATED API MODAL ---
     function ApiKeyModal({ isOpen, onClose }) {
       const [geminiKey, setGeminiKey] = useState(safeStorage.get('nexus_api_key'));
       const [grokKey, setGrokKey] = useState(safeStorage.get('nexus_grok_key'));
@@ -237,7 +245,7 @@
                         <a href="https://console.x.ai/" target="_blank" className="text-blue-400 hover:text-blue-300 hover:underline text-xs flex items-center"><Icons.ExternalLink className="w-3 h-3 mr-1"/> Dapatkan Key</a>
                     </div>
                     <input type="password" value={grokKey} onChange={(e) => setGrokKey(e.target.value)} placeholder="xai-..." className="w-full h-12 bg-black/50 border border-white/10 rounded-xl px-4 text-white focus:border-blue-500 outline-none" />
-                    <p className="text-[10px] text-slate-500 mt-2">Jika diisi, Grok akan mengevaluasi ulang & menyempurnakan hasil riset Gemini untuk akurasi ganda.</p>
+                    <p className="text-[10px] text-slate-500 mt-2">Jika diisi, Grok akan mengevaluasi ulang draf riset Gemini.</p>
                 </div>
             </div>
 
@@ -267,29 +275,61 @@
       );
     }
 
-    // --- MODUL 1: AI RESEARCHER (UPDATED PROMPT FOR INLINE LINKS & ANTI-HALLUCINATION) ---
+    // --- MODUL 1: AI RESEARCHER (FIXED LENGTH & VISIBLE METADATA) ---
     function AIResearcherModule({ onError, onOpenSettings }) {
       const [query, setQuery] = useState(''); const [loading, setLoading] = useState(false); const [response, setResponse] = useState(null); const [isExpanded, setIsExpanded] = useState(false); 
+      
       const handleResearch = async (e) => {
-        e.preventDefault(); if (!query.trim()) return; setLoading(true); setIsExpanded(false);
+        e.preventDefault(); if (!query.trim()) return; setLoading(true); setIsExpanded(false); setResponse(null);
         try { 
-            const sysPrompt = `Anda Profesor Riset yang pragmatis dan presisi. Tulis tinjauan pustaka MENDALAM. 
-            ATURAN MUTLAK KUTIPAN & SUMBER:
-            1. WAJIB Google Search untuk validasi fakta.
-            2. Kutipan WAJIB diletakkan LANGSUNG di dalam paragraf bersangkutan secara *inline* menggunakan format Markdown link: [Nama Sumber Asli](URL Valid).
-            3. DILARANG KERAS membuat segmen "Daftar Pustaka", "Referensi", atau menumpuk URL di akhir teks. Letakkan langsung di mana argumen itu dibahas.
-            4. DILARANG KERAS MENGARANG URL (HALUSINASI 404). Jika URL tidak ada dari alat pencari, sebutkan nama lembaganya saja tanpa link. Jangan menebak URL.
-            Struktur Teks: Pendahuluan, Pro/Kontra, Sintesis, Kesimpulan.`;
-            const { text } = await executeAIEngine(query, sysPrompt); setResponse(text); 
+            // INJEKSI PANJANG ABSOLUT
+            const sysPrompt = `Anda Profesor Riset yang pragmatis dan presisi. TUGAS: Tulis tinjauan pustaka MENDALAM.
+            ATURAN MUTLAK:
+            1. PANJANG MINIMAL 5 PARAGRAF KOMPREHENSIF (MINIMAL 1000 KATA). Elaborasi setiap argumen secara brutal dan detail. Dilarang menjawab singkat.
+            2. WAJIB Google Search untuk fakta mutakhir.
+            3. Kutipan WAJIB diletakkan LANGSUNG di dalam teks secara *inline* format: [Nama Sumber Asli](URL Valid).
+            4. DILARANG KERAS MENGARANG URL. Jika URL tidak ditemukan secara valid dari Search, gunakan nama lembaganya saja tanpa format link.
+            Struktur: Pendahuluan, Pro/Kontra, Sintesis, Kesimpulan.`;
+            
+            const resData = await executeAIEngine(query, sysPrompt); 
+            setResponse(resData); // Object: { text, sources }
         } 
         catch (err) { (err.status === 401 || err.status === 403) ? (onError(err.message, "error"), onOpenSettings()) : onError(`Gagal: ${err.message}`, "error"); } finally { setLoading(false); }
       };
+
       return (
         <div className="w-full flex flex-col flex-1">
           <form onSubmit={handleResearch} className="relative w-full mb-10 shrink-0"><div className="flex items-center bg-[#0a1526]/80 border border-blue-400/20 rounded-[2.5rem] p-2 h-[72px]"><div className="pl-5 pr-3 hidden md:block"><Icons.Search className="w-7 h-7 text-blue-400/70" /></div><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik Riset..." className="flex-1 h-full bg-transparent border-none outline-none text-white px-5 text-lg" /><button type="submit" disabled={loading || !query.trim()} className="shrink-0 bg-white text-black px-8 h-full rounded-[2rem] font-bold disabled:opacity-50">{loading ? 'Menyusun...' : 'Sintesis'}</button></div></form>
-          {loading && <div className="space-y-6 animate-pulse bg-[#0a1526]/60 p-10 rounded-[3rem]"><div className="h-6 bg-blue-500/20 rounded-full w-2/4"></div><div className="h-4 bg-blue-500/10 rounded-full w-full"></div></div>}
+          {loading && <div className="space-y-6 animate-pulse bg-[#0a1526]/60 p-10 rounded-[3rem]"><div className="h-6 bg-blue-500/20 rounded-full w-2/4"></div><div className="h-4 bg-blue-500/10 rounded-full w-full"></div><div className="h-4 bg-blue-500/10 rounded-full w-full"></div><div className="h-4 bg-blue-500/10 rounded-full w-5/6"></div></div>}
+          
           {response && !loading && (
-            <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all ${isExpanded ? 'min-h-[50vh]' : 'max-h-[85vh] overflow-hidden'}`}><div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center"><span className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black uppercase">Hasil</span><div className="flex space-x-2"><button onClick={() => setIsExpanded(!isExpanded)} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors">{isExpanded ? <Icons.Collapse className="w-5 h-5"/> : <Icons.Expand className="w-5 h-5"/>}</button><button onClick={() => copyToClipboard(response, () => onError("Disalin.", "success"))} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors"><Icons.Copy className="w-5 h-5"/></button></div></div><div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar'}`}><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{ __html: parseMarkdownToHTML(response) }} /></div></div>
+            <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all ${isExpanded ? 'min-h-[50vh]' : 'max-h-[85vh] overflow-hidden'}`}>
+                <div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center">
+                    <span className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black uppercase">Hasil Riset Komprehensif</span>
+                    <div className="flex space-x-2">
+                        <button onClick={() => setIsExpanded(!isExpanded)} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors">{isExpanded ? <Icons.Collapse className="w-5 h-5"/> : <Icons.Expand className="w-5 h-5"/>}</button>
+                        <button onClick={() => copyToClipboard(response.text, () => onError("Disalin.", "success"))} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors"><Icons.Copy className="w-5 h-5"/></button>
+                    </div>
+                </div>
+                
+                <div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar'}`}>
+                    <div className="prose prose-invert max-w-none mb-8" dangerouslySetInnerHTML={{ __html: parseMarkdownToHTML(response.text) }} />
+                    
+                    {/* UI RENDER UNTUK METADATA SUMBER ASLI (ANTI-HALUSINASI) */}
+                    {response.sources && response.sources.length > 0 && (
+                        <div className="mt-8 pt-6 border-t border-blue-500/20">
+                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center"><Icons.Database className="w-4 h-4 mr-2 text-blue-400" /> Grounding Metadata (Sumber Valid API)</h4>
+                            <div className="flex flex-wrap gap-2">
+                                {response.sources.map((src, idx) => (
+                                    <a key={idx} href={src.uri} target="_blank" className="bg-blue-900/20 hover:bg-blue-600/40 border border-blue-500/30 text-blue-300 text-[11px] px-4 py-2 rounded-xl flex items-center transition-colors shadow-sm">
+                                        <Icons.ExternalLink className="w-3.5 h-3.5 mr-2 opacity-70" /> {src.title || (new URL(src.uri)).hostname}
+                                    </a>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
           )}
         </div>
       );
@@ -311,7 +351,7 @@
       );
     }
 
-    // --- MODUL 3: DATA ANALYZER (UPDATED EXPAND) ---
+    // --- MODUL 3: DATA ANALYZER ---
     function DataAnalyzerModule({ onError, onOpenSettings }) {
       const [data, setData] = useState(null); const [selectedCol, setSelectedCol] = useState(''); const [stats, setStats] = useState(null); const [aiResp, setAiResp] = useState(null); const [loading, setLoading] = useState(false); const [isExpanded, setIsExpanded] = useState(false);
       
@@ -367,7 +407,7 @@
       );
     }
 
-    // --- MODUL 4: DOCUMENT SCANNER (UPDATED EXPAND) ---
+    // --- MODUL 4: DOCUMENT SCANNER ---
     function DocumentScannerModule({ onError, onOpenSettings }) {
       const [fileState, setFileState] = useState(null); const [extractedText, setExtractedText] = useState([]); 
       const [searchQuery, setSearchQuery] = useState(''); const [aiAnswer, setAiAnswer] = useState(''); 
@@ -472,7 +512,7 @@ Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI.`;
       );
     }
 
-    // --- MODUL 5: ACADEMIC REFINER (UPDATED EXPAND) ---
+    // --- MODUL 5: ACADEMIC REFINER ---
     function AcademicRefinerModule({ onError, onOpenSettings }) {
       const [rawText, setRawText] = useState(''); const [refinedText, setRefinedText] = useState(''); const [loading, setLoading] = useState(false); const [isExtracting, setIsExtracting] = useState(false); const [isExpanded, setIsExpanded] = useState(false);
 
