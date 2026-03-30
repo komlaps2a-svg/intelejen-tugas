@@ -92,13 +92,10 @@
       if (lines.length < 2) return null;
       const firstLine = lines[0];
       const delimiter = firstLine.includes(';') ? ';' : (firstLine.includes('\t') ? '\t' : ',');
-      const headers = firstLine.split(delimiter).map((h, i) => {
-          let clean = h.replace(/^"|"$/g, '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
-          return clean ? clean : `Kolom_${i+1}`; 
-      });
+      const headers = firstLine.split(delimiter).map(h => h.trim().replace(/^"|"$/g, ''));
       const rows = lines.slice(1).map(line => {
-        const values = line.split(delimiter).map(v => v.replace(/^"|"$/g, '').trim());
-        return headers.reduce((obj, header, i) => { obj[header] = values[i] || ''; return obj; }, {});
+        const values = line.split(delimiter).map(v => v.trim().replace(/^"|"$/g, ''));
+        return headers.reduce((obj, header, i) => { obj[header] = values[i]; return obj; }, {});
       });
       return { headers, rows };
     };
@@ -114,46 +111,75 @@
     const stripMarkdown = (md) => md ? md.replace(/#{1,6}\s+/g, '').replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/`{1,3}(.*?)`{1,3}/g, '$1').replace(/\n\s*\n/g, '\n\n') : '';
     const copyToClipboard = (text, onSuccess) => { const t = document.createElement("textarea"); t.value = stripMarkdown(text); t.style.position = "fixed"; t.style.left = "-9999px"; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); if (onSuccess) onSuccess(); } catch (err) {} document.body.removeChild(t); };
 
-    // --- AI ENGINE DENGAN TOKEN UNCAPPED ---
+    // --- AI ENGINE (UPDATED FOR GROK COLLAB) ---
     const executeAIEngine = async (prompt, systemPrompt, customContext = "") => {
       const localKey = safeStorage.get('nexus_api_key');
-      const modelsToTry = [
-          { name: "gemini-2.0-flash", useSearch: true },
-          { name: "gemini-1.5-flash", useSearch: false }
-      ];
-      let lastError = null;
+      const grokKey = safeStorage.get('nexus_grok_key');
       
+      const modelsToTry = localKey.trim() === "" ? [ { name: "gemini-2.5-flash-preview-09-2025", useSearch: true } ] : [ { name: "gemini-2.5-flash", useSearch: true }, { name: "gemini-1.5-flash", useSearch: false } ];
+      let lastError = null;
+      let finalDraft = "";
+      
+      // INJEKSI KESADARAN TEMPORAL
       const dateContext = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-      const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan ini sebagai acuan absolut.]\n\n`;
+      const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan ini sebagai acuan absolut. DILARANG KERAS berasumsi ini tahun 2023 atau 2024.]\n\n`;
       const fullSystemPrompt = temporalInstruction + systemPrompt;
 
       const safeContext = customContext ? customContext.substring(0, 30000) : ""; 
       const finalPrompt = customContext ? `[KONTEKS LOKAL]:\n${safeContext}\n\n[INSTRUKSI/PERTANYAAN]:\n${prompt}` : prompt;
 
+      // STEP 1: GEMINI CALL (Research & Initial Draft)
       for (const config of modelsToTry) {
          try {
              const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.name}:generateContent?key=${localKey}`;
-             // BUG FIX ABSOLUT: Menaikkan temperature agar tidak kaku, dan MENYUNTIKKAN KEMBALI maxOutputTokens 8192
-             const payload = { 
-                 contents: [{ parts: [{ text: finalPrompt }] }], 
-                 systemInstruction: { parts: [{ text: fullSystemPrompt }] }, 
-                 generationConfig: { temperature: 0.6, maxOutputTokens: 8192 } 
-             };
-             
+             const payload = { contents: [{ parts: [{ text: finalPrompt }] }], systemInstruction: { parts: [{ text: fullSystemPrompt }] }, generationConfig: { temperature: 0.3 } };
              if (config.useSearch && !customContext) payload.tools = [{ google_search: {} }];
-             
              const res = await fetchWithBackoff(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
              const data = await res.json();
-             const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-             
-             if (!text) throw new Error("Respons diblokir filter Google.");
-             return { text, sources: data.candidates?.[0]?.groundingMetadata?.groundingAttributions?.map(a => ({ uri: a.web?.uri, title: a.web?.title })) || [] };
+             finalDraft = data.candidates?.[0]?.content?.parts?.[0]?.text;
+             if (!finalDraft) throw new Error("Respons diblokir filter Google.");
+             break; // Success, exit retry loop
          } catch (err) { 
              lastError = err; 
-             if (err.status === 401 || err.status === 403) { const e = new Error("HTTP 401: API Key Ditolak."); e.status = err.status; throw e; } 
+             if (err.status === 401 || err.status === 403) { const e = new Error("HTTP 401: API Key Gemini Ditolak."); e.status = err.status; throw e; } 
          }
       }
-      throw new Error(lastError?.message.includes("400") ? "Batasan Sistem: Teks terlalu panjang." : `Gagal: ${lastError?.message || 'Model tidak didukung'}`); 
+
+      if (!finalDraft) {
+          throw new Error(lastError?.message.includes("400") ? "Batasan Sistem: Teks terlalu panjang." : `Gagal: ${lastError?.message || 'Koneksi terputus'}`); 
+      }
+
+      // STEP 2: GROK COLLABORATION (Refinement & Anti-Hallucination logic)
+      if (grokKey && grokKey.trim() !== "") {
+          try {
+              const grokRes = await fetch("https://api.x.ai/v1/chat/completions", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", "Authorization": `Bearer ${grokKey}` },
+                  body: JSON.stringify({
+                      model: "grok-beta",
+                      messages: [
+                          { role: "system", content: fullSystemPrompt + "\n\n[INSTRUKSI KOLABORASI (GROK MODE)]: Anda adalah lapisan evaluasi logis tingkat tinggi. Tugas Anda adalah memvalidasi, menyempurnakan ketajaman argumen, dan merapikan struktur dari draf AI di bawah ini. JANGAN ubah substansi faktanya, namun buat menjadi lebih brutal, langsung, akurat, dan akademis. Pastikan referensi tetap in-line (sebaris)." },
+                          { role: "user", content: `Draf Awal untuk diperbaiki:\n\n${finalDraft}` }
+                      ],
+                      temperature: 0.2
+                  })
+              });
+              
+              if (grokRes.ok) {
+                  const grokData = await grokRes.json();
+                  if (grokData.choices?.[0]?.message?.content) {
+                      finalDraft = grokData.choices[0].message.content; // Override with Grok's synthesized draft
+                  }
+              } else {
+                  console.warn("Koneksi Grok API ditolak/gagal. Fallback ke draf Gemini murni.");
+              }
+          } catch(err) {
+              console.warn("Grok API error:", err.message);
+              // Silent fail for Grok to allow graceful degradation back to Gemini.
+          }
+      }
+
+      return { text: finalDraft };
     };
 
     // --- DYNAMIC LOADERS ---
@@ -184,17 +210,38 @@
       );
     }
 
+    // --- UPDATED API MODAL ---
     function ApiKeyModal({ isOpen, onClose }) {
-      const [key, setKey] = useState(safeStorage.get('nexus_api_key'));
+      const [geminiKey, setGeminiKey] = useState(safeStorage.get('nexus_api_key'));
+      const [grokKey, setGrokKey] = useState(safeStorage.get('nexus_grok_key'));
+
       if (!isOpen) return null;
       return (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
           <div className="bg-[#050a14] border border-blue-500/20 rounded-3xl p-8 w-full max-w-lg shadow-2xl relative">
             <h3 className="text-2xl font-bold text-white mb-2 flex items-center"><Icons.Settings className="w-6 h-6 mr-3 text-blue-400" /> API Settings</h3>
-            <p className="text-sm text-slate-400 mb-4">Masukkan Gemini API Key untuk membuka kunci model (Disimpan 100% lokal).</p>
-            <a href="https://aistudio.google.com/app/apikey" target="_blank" className="inline-flex items-center text-blue-400 hover:text-blue-300 hover:underline text-sm font-semibold mb-6 bg-blue-500/10 px-4 py-2 rounded-lg border border-blue-500/20 transition-all"><Icons.ExternalLink className="w-4 h-4 mr-2"/> Dapatkan API Key Resmi di Google AI Studio</a>
-            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="AIzaSy..." className="w-full h-14 bg-black/50 border border-white/10 rounded-2xl px-5 text-white mb-8 focus:border-blue-500 outline-none" />
-            <div className="flex justify-end space-x-4"><button onClick={onClose} className="px-6 py-3 text-slate-400 hover:text-white font-bold transition-colors">Tutup</button><button onClick={() => { safeStorage.set('nexus_api_key', key.trim()); onClose(); }} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-2xl font-bold transition-all">Simpan Kredensial</button></div>
+            <p className="text-sm text-slate-400 mb-6">Masukkan kredensial API. Data disimpan lokal di browser Anda.</p>
+            
+            <div className="space-y-6 mb-8">
+                <div>
+                    <div className="flex justify-between items-center mb-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Gemini API Key (Primary)</label>
+                        <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-blue-400 hover:text-blue-300 hover:underline text-xs flex items-center"><Icons.ExternalLink className="w-3 h-3 mr-1"/> Dapatkan Key</a>
+                    </div>
+                    <input type="password" value={geminiKey} onChange={(e) => setGeminiKey(e.target.value)} placeholder="AIzaSy..." className="w-full h-12 bg-black/50 border border-white/10 rounded-xl px-4 text-white focus:border-blue-500 outline-none" />
+                </div>
+
+                <div>
+                    <div className="flex justify-between items-center mb-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Grok API Key (Collab/Validator)</label>
+                        <a href="https://console.x.ai/" target="_blank" className="text-blue-400 hover:text-blue-300 hover:underline text-xs flex items-center"><Icons.ExternalLink className="w-3 h-3 mr-1"/> Dapatkan Key</a>
+                    </div>
+                    <input type="password" value={grokKey} onChange={(e) => setGrokKey(e.target.value)} placeholder="xai-..." className="w-full h-12 bg-black/50 border border-white/10 rounded-xl px-4 text-white focus:border-blue-500 outline-none" />
+                    <p className="text-[10px] text-slate-500 mt-2">Jika diisi, Grok akan mengevaluasi ulang & menyempurnakan hasil riset Gemini untuk akurasi ganda.</p>
+                </div>
+            </div>
+
+            <div className="flex justify-end space-x-4"><button onClick={onClose} className="px-6 py-3 text-slate-400 hover:text-white font-bold transition-colors">Tutup</button><button onClick={() => { safeStorage.set('nexus_api_key', geminiKey.trim()); safeStorage.set('nexus_grok_key', grokKey.trim()); onClose(); }} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-xl font-bold transition-all">Simpan Kredensial</button></div>
           </div>
         </div>
       );
@@ -220,34 +267,29 @@
       );
     }
 
-    // --- MODUL 1: AI RESEARCHER ---
+    // --- MODUL 1: AI RESEARCHER (UPDATED PROMPT FOR INLINE LINKS & ANTI-HALLUCINATION) ---
     function AIResearcherModule({ onError, onOpenSettings }) {
       const [query, setQuery] = useState(''); const [loading, setLoading] = useState(false); const [response, setResponse] = useState(null); const [isExpanded, setIsExpanded] = useState(false); 
-      
       const handleResearch = async (e) => {
         e.preventDefault(); if (!query.trim()) return; setLoading(true); setIsExpanded(false);
         try { 
-          // PROMPT DIPERKUAT: WAJIB PANJANG
-          const sys = `Anda adalah Profesor Riset Senior. Tulis tinjauan pustaka akademik MENDALAM.
-ATURAN MUTLAK:
-1. OUTPUT WAJIB SANGAT PANJANG, DETAIL, DAN KOMPREHENSIF (MINIMAL 1000 KATA). DILARANG MENJAWAB SINGKAT.
-2. WAJIB menggunakan Google Search untuk memvalidasi argumen.
-3. Setiap kalimat klaim WAJIB memiliki sumber yang diletakkan LANGSUNG di bawah paragraf tersebut. Format: [Sumber: Judul Berita/Jurnal](URL Asli).
-4. DILARANG KERAS membuat bagian "Daftar Pustaka" atau menumpuk URL di akhir teks.
-5. DILARANG KERAS MENGARANG URL (HALUSINASI 404). Gunakan hanya tautan asli hasil pencarian.
-Struktur: Pendahuluan, Pembahasan Utama, Sintesis, Kesimpulan.`;
-          
-          const { text } = await executeAIEngine(query, sys); setResponse(text); 
+            const sysPrompt = `Anda Profesor Riset yang pragmatis dan presisi. Tulis tinjauan pustaka MENDALAM. 
+            ATURAN MUTLAK KUTIPAN & SUMBER:
+            1. WAJIB Google Search untuk validasi fakta.
+            2. Kutipan WAJIB diletakkan LANGSUNG di dalam paragraf bersangkutan secara *inline* menggunakan format Markdown link: [Nama Sumber Asli](URL Valid).
+            3. DILARANG KERAS membuat segmen "Daftar Pustaka", "Referensi", atau menumpuk URL di akhir teks. Letakkan langsung di mana argumen itu dibahas.
+            4. DILARANG KERAS MENGARANG URL (HALUSINASI 404). Jika URL tidak ada dari alat pencari, sebutkan nama lembaganya saja tanpa link. Jangan menebak URL.
+            Struktur Teks: Pendahuluan, Pro/Kontra, Sintesis, Kesimpulan.`;
+            const { text } = await executeAIEngine(query, sysPrompt); setResponse(text); 
         } 
         catch (err) { (err.status === 401 || err.status === 403) ? (onError(err.message, "error"), onOpenSettings()) : onError(`Gagal: ${err.message}`, "error"); } finally { setLoading(false); }
       };
-
       return (
         <div className="w-full flex flex-col flex-1">
-          <form onSubmit={handleResearch} className="relative w-full mb-10 shrink-0"><div className="flex items-center bg-[#0a1526]/80 border border-blue-400/20 rounded-[2.5rem] p-2 h-[72px]"><div className="pl-5 pr-3 hidden md:block"><Icons.Search className="w-7 h-7 text-blue-400/70" /></div><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik Riset (contoh: Efek inflasi pada UMKM)..." className="flex-1 h-full bg-transparent border-none outline-none text-white px-5 text-lg" /><button type="submit" disabled={loading || !query.trim()} className="shrink-0 bg-blue-600 hover:bg-blue-500 text-white px-8 h-full rounded-[2rem] font-bold disabled:opacity-50 transition-colors">{loading ? 'Menyusun...' : 'Sintesis AI'}</button></div></form>
+          <form onSubmit={handleResearch} className="relative w-full mb-10 shrink-0"><div className="flex items-center bg-[#0a1526]/80 border border-blue-400/20 rounded-[2.5rem] p-2 h-[72px]"><div className="pl-5 pr-3 hidden md:block"><Icons.Search className="w-7 h-7 text-blue-400/70" /></div><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik Riset..." className="flex-1 h-full bg-transparent border-none outline-none text-white px-5 text-lg" /><button type="submit" disabled={loading || !query.trim()} className="shrink-0 bg-white text-black px-8 h-full rounded-[2rem] font-bold disabled:opacity-50">{loading ? 'Menyusun...' : 'Sintesis'}</button></div></form>
           {loading && <div className="space-y-6 animate-pulse bg-[#0a1526]/60 p-10 rounded-[3rem]"><div className="h-6 bg-blue-500/20 rounded-full w-2/4"></div><div className="h-4 bg-blue-500/10 rounded-full w-full"></div></div>}
           {response && !loading && (
-            <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all ${isExpanded ? 'min-h-[50vh]' : 'max-h-[85vh] overflow-hidden'}`}><div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center"><span className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black uppercase">Hasil Riset</span><div className="flex space-x-2"><button onClick={() => setIsExpanded(!isExpanded)} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors">{isExpanded ? <Icons.Collapse className="w-5 h-5"/> : <Icons.Expand className="w-5 h-5"/>}</button><button onClick={() => copyToClipboard(response, () => onError("Disalin.", "success"))} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors"><Icons.Copy className="w-5 h-5"/></button></div></div><div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar'}`}><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{ __html: parseMarkdownToHTML(response) }} /></div></div>
+            <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all ${isExpanded ? 'min-h-[50vh]' : 'max-h-[85vh] overflow-hidden'}`}><div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center"><span className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black uppercase">Hasil</span><div className="flex space-x-2"><button onClick={() => setIsExpanded(!isExpanded)} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors">{isExpanded ? <Icons.Collapse className="w-5 h-5"/> : <Icons.Expand className="w-5 h-5"/>}</button><button onClick={() => copyToClipboard(response, () => onError("Disalin.", "success"))} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors"><Icons.Copy className="w-5 h-5"/></button></div></div><div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar'}`}><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{ __html: parseMarkdownToHTML(response) }} /></div></div>
           )}
         </div>
       );
@@ -263,15 +305,15 @@ Struktur: Pendahuluan, Pembahasan Utama, Sintesis, Kesimpulan.`;
       };
       return (
         <div className="w-full">
-          <div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-6 mb-12"><form onSubmit={searchJournals} className="flex flex-col lg:flex-row gap-5 lg:items-end w-full"><div className="flex-1 relative"><label className="block text-[11px] font-bold text-slate-500 uppercase mb-3">Kata Kunci Literasi</label><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik..." className="w-full h-[64px] bg-[#050a14]/80 border border-white/10 rounded-[1.5rem] px-5 text-white outline-none focus:border-blue-500" /></div><div className="w-full lg:w-72"><CustomSelect label="Filter Tahun" options={[{value:'all', label:'Semua'}, {value:'2024', label:'2024+'}, {value:'2022', label:'2022+'}]} value={year} onChange={setYear} allowManual={true} /></div><div className="w-full lg:w-auto"><button type="submit" disabled={loading || !query.trim()} className="w-full h-[64px] bg-blue-600 hover:bg-blue-500 text-white px-10 rounded-[1.5rem] font-bold disabled:opacity-50 transition-colors">{loading ? 'Mencari...' : 'Cari'}</button></div></form></div>
+          <div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-6 mb-12"><form onSubmit={searchJournals} className="flex flex-col lg:flex-row gap-5 lg:items-end w-full"><div className="flex-1 relative"><label className="block text-[11px] font-bold text-slate-500 uppercase mb-3">Kata Kunci Literasi</label><input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Topik..." className="w-full h-[64px] bg-[#050a14]/80 border border-white/10 rounded-[1.5rem] px-5 text-white" /></div><div className="w-full lg:w-72"><CustomSelect label="Filter Tahun" options={[{value:'all', label:'Semua'}, {value:'2024', label:'2024+'}, {value:'2022', label:'2022+'}]} value={year} onChange={setYear} allowManual={true} /></div><div className="w-full lg:w-auto"><button type="submit" disabled={loading || !query.trim()} className="w-full h-[64px] bg-blue-600 text-white px-10 rounded-[1.5rem] font-bold disabled:opacity-50">{loading ? 'Mencari...' : 'Cari'}</button></div></form></div>
           {!loading && results.length > 0 && (<div className="space-y-4">{results.map((paper, idx) => (<div key={idx} className="bg-[#0a1526]/80 border border-blue-500/20 rounded-[2rem] p-6 flex flex-col sm:flex-row justify-between"><div className="flex-1"><h4 className="text-xl font-semibold text-white">{paper.title || "Unknown"}</h4><div className="mt-4 flex gap-3"><span className="px-3 py-1 bg-blue-500/10 rounded-lg text-xs font-bold text-blue-300">{paper.publication_year}</span><span className="text-xs font-bold text-amber-300 bg-amber-500/10 px-3 py-1 rounded-lg">Sitasi: {paper.cited_by_count || 0}</span></div></div>{paper.doi && (<a href={paper.doi} target="_blank" className="w-12 h-12 bg-blue-500/10 border border-blue-500/20 text-blue-400 rounded-2xl flex justify-center items-center hover:bg-blue-600 hover:text-white transition-colors"><Icons.ExternalLink className="w-5 h-5" /></a>)}</div>))}</div>)}
         </div>
       );
     }
 
-    // --- MODUL 3: DATA ANALYZER ---
+    // --- MODUL 3: DATA ANALYZER (UPDATED EXPAND) ---
     function DataAnalyzerModule({ onError, onOpenSettings }) {
-      const [data, setData] = useState(null); const [selectedCol, setSelectedCol] = useState(''); const [stats, setStats] = useState(null); const [aiResp, setAiResp] = useState(null); const [loading, setLoading] = useState(false);
+      const [data, setData] = useState(null); const [selectedCol, setSelectedCol] = useState(''); const [stats, setStats] = useState(null); const [aiResp, setAiResp] = useState(null); const [loading, setLoading] = useState(false); const [isExpanded, setIsExpanded] = useState(false);
       
       const processData = (csvText) => {
         try {
@@ -286,7 +328,7 @@ Struktur: Pendahuluan, Pembahasan Utama, Sintesis, Kesimpulan.`;
       useEffect(() => { if(data && selectedCol) setStats(calculateStats(data.rows.map(r => parseFloat(r[selectedCol])).filter(v => !isNaN(v)))); }, [data, selectedCol]);
       
       const runAI = async () => {
-        if(!stats) return; setLoading(true);
+        if(!stats) return; setLoading(true); setIsExpanded(false);
         try { setAiResp(await executeAIEngine(`Analisis: ${selectedCol}`, `Anda Analis Data. Variabel="${selectedCol}". N=${stats.n}, Mean=${stats.mean}, SD=${stats.stdDev}. Beri narasi implikasi data ini secara mendalam.`)); }
         catch (e) { (e.status===401||e.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : onError(e.message, "error"); } finally { setLoading(false); }
       };
@@ -296,15 +338,28 @@ Struktur: Pendahuluan, Pembahasan Utama, Sintesis, Kesimpulan.`;
           {!data && (
             <div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-10 flex flex-col items-center">
               <Icons.Database className="w-16 h-16 text-blue-400 mb-6" /><h3 className="text-2xl font-bold text-white mb-6">Injeksi CSV/Excel Data</h3>
-              <label className="w-full max-w-md bg-blue-600 hover:bg-blue-500 text-white min-h-[64px] py-4 rounded-[2rem] flex justify-center items-center font-bold cursor-pointer transition-colors">Unggah File CSV <input type="file" accept=".csv,.txt" onChange={handleFile} className="hidden" /></label>
+              <label className="w-full max-w-md bg-blue-600 hover:bg-blue-500 text-white h-[64px] rounded-2xl flex justify-center items-center font-bold cursor-pointer transition-colors">Unggah File CSV <input type="file" accept=".csv,.txt" onChange={handleFile} className="hidden" /></label>
             </div>
           )}
           {data && (
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-              <div className="xl:col-span-1 space-y-6"><div className="bg-[#0a1526]/90 border border-blue-500/20 rounded-[2.5rem] p-8"><CustomSelect label="Pilih Variabel" options={data.numericColumns.map(c=>({value:c,label:c}))} value={selectedCol} onChange={setSelectedCol} /><button onClick={()=>setData(null)} className="mt-6 w-full min-h-[64px] py-4 bg-red-500/10 text-red-400 rounded-[2rem] font-bold hover:bg-red-500/20 flex justify-center items-center transition-colors">Tutup Data</button></div></div>
+              <div className="xl:col-span-1 space-y-6"><div className="bg-[#0a1526]/90 border border-blue-500/20 rounded-[2.5rem] p-8"><CustomSelect label="Pilih Variabel" options={data.numericColumns.map(c=>({value:c,label:c}))} value={selectedCol} onChange={setSelectedCol} /><button onClick={()=>setData(null)} className="mt-6 w-full min-h-[64px] py-4 bg-red-500/10 text-red-400 rounded-[2rem] font-bold hover:bg-red-500/20 flex justify-center items-center">Tutup Data</button></div></div>
               <div className="xl:col-span-2 space-y-8">
-                {stats && (<div className="bg-[#0a1526] border border-blue-500/20 rounded-[2.5rem] p-8"><div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-bold text-white">Metrik Tendensi</h3><button onClick={runAI} disabled={loading} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-[2rem] font-bold min-h-[64px] flex items-center justify-center disabled:opacity-50 transition-colors">{loading?'Sintesis...':'Tanya AI'}</button></div><div className="grid grid-cols-2 sm:grid-cols-4 gap-4"><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">N (SAMPEL)</p><p className="text-2xl font-bold text-white">{stats.n}</p></div><div className="bg-blue-600 p-4 rounded-xl"><p className="text-xs text-blue-200">MEAN</p><p className="text-2xl font-bold text-white">{stats.mean}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">MEDIAN</p><p className="text-2xl font-bold text-white">{stats.median}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">STD DEV</p><p className="text-2xl font-bold text-white">{stats.stdDev}</p></div></div></div>)}
-                {aiResp && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 max-h-[70vh] overflow-y-auto custom-scrollbar"><div className="flex justify-between items-center mb-6"><span className="bg-blue-600 text-white px-4 py-1.5 rounded-full text-xs font-bold uppercase">Sintesis AI</span><button onClick={()=>setAiResp(null)} className="text-red-400 hover:text-red-300 transition-colors"><Icons.Trash className="w-5 h-5"/></button></div><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiResp.text)}}/></div>)}
+                {stats && (<div className="bg-[#0a1526] border border-blue-500/20 rounded-[2.5rem] p-8"><div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-bold text-white">Metrik Tendensi</h3><button onClick={runAI} disabled={loading} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-[2rem] font-bold min-h-[64px] flex items-center justify-center disabled:opacity-50">{loading?'Sintesis...':'Tanya AI'}</button></div><div className="grid grid-cols-2 sm:grid-cols-4 gap-4"><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">N (SAMPEL)</p><p className="text-2xl font-bold text-white">{stats.n}</p></div><div className="bg-blue-600 p-4 rounded-xl"><p className="text-xs text-blue-200">MEAN</p><p className="text-2xl font-bold text-white">{stats.mean}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">MEDIAN</p><p className="text-2xl font-bold text-white">{stats.median}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">STD DEV</p><p className="text-2xl font-bold text-white">{stats.stdDev}</p></div></div></div>)}
+                {aiResp && (
+                  <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all ${isExpanded ? 'min-h-[50vh]' : 'max-h-[85vh] overflow-hidden'}`}>
+                    <div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center">
+                       <span className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black uppercase">Sintesis AI</span>
+                       <div className="flex space-x-2">
+                          <button onClick={() => setIsExpanded(!isExpanded)} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors">{isExpanded ? <Icons.Collapse className="w-5 h-5"/> : <Icons.Expand className="w-5 h-5"/>}</button>
+                          <button onClick={()=>setAiResp(null)} className="p-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-full transition-colors"><Icons.Trash className="w-5 h-5"/></button>
+                       </div>
+                    </div>
+                    <div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar'}`}>
+                       <div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiResp.text)}}/>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -312,7 +367,7 @@ Struktur: Pendahuluan, Pembahasan Utama, Sintesis, Kesimpulan.`;
       );
     }
 
-    // --- MODUL 4: DOCUMENT SCANNER ---
+    // --- MODUL 4: DOCUMENT SCANNER (UPDATED EXPAND) ---
     function DocumentScannerModule({ onError, onOpenSettings }) {
       const [fileState, setFileState] = useState(null); const [extractedText, setExtractedText] = useState([]); 
       const [searchQuery, setSearchQuery] = useState(''); const [aiAnswer, setAiAnswer] = useState(''); 
@@ -331,7 +386,7 @@ Struktur: Pendahuluan, Pembahasan Utama, Sintesis, Kesimpulan.`;
       };
 
       const handleFile = async (e) => {
-        const file = e.target.files[0]; if(!file) return; setFileName(file.name); setFileState('loading'); setSuggestions([]); setAiAnswer(''); setSearchQuery(''); setIsExpanded(false);
+        const file = e.target.files[0]; if(!file) return; setFileName(file.name); setFileState('loading'); setSuggestions([]); setAiAnswer(''); setSearchQuery('');
         try {
           const ext = file.name.split('.').pop().toLowerCase(); let parsed = []; let textRaw = "";
           if (ext === 'pdf') { const pdfjs = await loadPdfJs(); const doc = await pdfjs.getDocument(await file.arrayBuffer()).promise; for(let i=1; i<=Math.min(doc.numPages, 100); i++){ const t = (await (await doc.getPage(i)).getTextContent()).items.map(t=>t.str).join(' '); parsed.push({page:i, text: t}); textRaw += t + " ";} }
@@ -347,7 +402,7 @@ Struktur: Pendahuluan, Pembahasan Utama, Sintesis, Kesimpulan.`;
         if(typeof queryParam === 'string') setSearchQuery(queryParam); 
         if(!finalQuery.trim()) return; 
         setLoading(true); setAiAnswer(''); setIsExpanded(false);
-        try { const ctx = extractedText.slice(0, 15).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); setAiAnswer((await executeAIEngine(finalQuery, `Jawab PANJANG DAN MENDALAM murni berdasarkan dokumen. Beri referensi (Hal X).`, ctx)).text); }
+        try { const ctx = extractedText.slice(0, 15).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); setAiAnswer((await executeAIEngine(finalQuery, `Jawab MURNI berdasarkan dokumen. Beri referensi (Hal X).`, ctx)).text); }
         catch(err) { (err.status===401||err.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : setAiAnswer(err.message); } finally { setLoading(false); }
       };
 
@@ -357,9 +412,9 @@ Struktur: Pendahuluan, Pembahasan Utama, Sintesis, Kesimpulan.`;
         try { 
           const ctx = extractedText.slice(0, 15).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); 
           const sys = `Anda Profesor Penguji Sidang Akademik. TUGAS MUTLAK:
-1. Evaluasi Komprehensif Naskah (Kelebihan & Celah Riset SANGAT DETAIL).
-2. Simulasi 3 Pertanyaan Sidang tingkat tinggi & Pertahanan Akademisnya (PANJANG DAN LOGIS).
-Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI. DILARANG MERINGKAS.`;
+1. Evaluasi Komprehensif Naskah (Kelebihan & Celah Riset).
+2. Simulasi 3 Pertanyaan Sidang tingkat tinggi & Pertahanan Akademisnya.
+Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI.`;
           setAiAnswer((await executeAIEngine("Lakukan Uji Kritis Akademik pada dokumen ini.", sys, ctx)).text); 
         }
         catch(err) { (err.status===401||err.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : setAiAnswer(err.message); } finally { setLoading(false); }
@@ -396,24 +451,20 @@ Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI. DILARANG MER
                   </div>
                 </form>
               </div>
-              
+
               {aiAnswer && (
-                <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all ${isExpanded ? 'min-h-[50vh]' : 'max-h-[70vh] overflow-hidden'}`}>
-                  <div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center">
-                     <span className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black uppercase">Hasil Analisis AI</span>
-                     <div className="flex space-x-2">
-                       <button onClick={() => setIsExpanded(!isExpanded)} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors">
-                         {isExpanded ? <Icons.Collapse className="w-5 h-5"/> : <Icons.Expand className="w-5 h-5"/>}
-                       </button>
-                       <button onClick={() => copyToClipboard(aiAnswer, () => onError("Teks disalin!", "success"))} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors">
-                         <Icons.Copy className="w-5 h-5"/>
-                       </button>
-                     </div>
-                  </div>
-                  <div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar flex-1'}`}>
-                     <div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiAnswer)}}/>
-                  </div>
-                </div>
+                 <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all ${isExpanded ? 'min-h-[50vh]' : 'max-h-[85vh] overflow-hidden'}`}>
+                    <div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center">
+                       <span className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black uppercase">Hasil Analisis</span>
+                       <div className="flex space-x-2">
+                          <button onClick={() => setIsExpanded(!isExpanded)} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors">{isExpanded ? <Icons.Collapse className="w-5 h-5"/> : <Icons.Expand className="w-5 h-5"/>}</button>
+                          <button onClick={() => copyToClipboard(aiAnswer, () => onError("Disalin.", "success"))} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors"><Icons.Copy className="w-5 h-5"/></button>
+                       </div>
+                    </div>
+                    <div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar'}`}>
+                       <div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiAnswer)}}/>
+                    </div>
+                 </div>
               )}
             </div>
           )}
@@ -421,9 +472,9 @@ Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI. DILARANG MER
       );
     }
 
-    // --- MODUL 5: ACADEMIC REFINER ---
+    // --- MODUL 5: ACADEMIC REFINER (UPDATED EXPAND) ---
     function AcademicRefinerModule({ onError, onOpenSettings }) {
-      const [rawText, setRawText] = useState(''); const [refinedText, setRefinedText] = useState(''); const [loading, setLoading] = useState(false); const [isExtracting, setIsExtracting] = useState(false);
+      const [rawText, setRawText] = useState(''); const [refinedText, setRefinedText] = useState(''); const [loading, setLoading] = useState(false); const [isExtracting, setIsExtracting] = useState(false); const [isExpanded, setIsExpanded] = useState(false);
 
       const handleFileUpload = async (e) => {
         const file = e.target.files[0]; if(!file) return; setIsExtracting(true); setRawText('Memindai PDF dan membersihkan noise via AI... Mohon tunggu.');
@@ -442,8 +493,8 @@ Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI. DILARANG MER
       };
 
       const runRefiner = async (e) => {
-        e.preventDefault(); if(!rawText) return; setLoading(true);
-        try { setRefinedText((await executeAIEngine(rawText, `Anda Editor Akademik. TUGAS: Parafrase SANGAT ILMIAH, SANGAT PANJANG, untuk menurunkan Plagiasi (Turnitin). JANGAN MERINGKAS.`)).text); }
+        e.preventDefault(); if(!rawText) return; setLoading(true); setIsExpanded(false);
+        try { setRefinedText((await executeAIEngine(rawText, `Anda Editor Akademik. TUGAS: Parafrase SANGAT ILMIAH untuk menurunkan Plagiasi (Turnitin). JANGAN mengubah makna.`)).text); }
         catch(err) { (err.status===401||err.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : onError(err.message, "error"); } finally { setLoading(false); }
       };
 
@@ -452,17 +503,30 @@ Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI. DILARANG MER
           <div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 mb-12">
             <h3 className="text-2xl font-bold text-white mb-2">Laboratorium Diksi (PDF)</h3>
             <p className="text-sm text-slate-400 mb-6">Unggah PDF. AI akan membuang Daftar Pustaka/Isi otomatis lalu memparafrase isinya untuk lolos Turnitin.</p>
-            <div className="mb-6"><label className="bg-blue-600/20 text-blue-300 border border-blue-500/30 px-6 py-3 rounded-2xl text-sm font-bold cursor-pointer inline-flex items-center hover:bg-blue-600/40 transition-colors"><Icons.Upload className="w-5 h-5 mr-2" />{isExtracting ? 'Mengekstrak AI...' : 'Unggah PDF/DOCX'}<input type="file" accept=".pdf,.docx,.txt" onChange={handleFileUpload} className="hidden" disabled={isExtracting} /></label></div>
+            <div className="mb-6"><label className="bg-blue-600/20 text-blue-300 border border-blue-500/30 px-6 py-3 rounded-2xl text-sm font-bold cursor-pointer inline-flex items-center hover:bg-blue-600/40"><Icons.Upload className="w-5 h-5 mr-2" />{isExtracting ? 'Mengekstrak AI...' : 'Unggah PDF/DOCX'}<input type="file" accept=".pdf,.docx,.txt" onChange={handleFileUpload} className="hidden" disabled={isExtracting} /></label></div>
             <form onSubmit={runRefiner} className="flex flex-col gap-5"><textarea value={rawText} onChange={(e)=>setRawText(e.target.value)} placeholder="Atau paste draf skripsi langsung..." className="w-full min-h-[250px] bg-[#050a14]/80 border border-white/10 rounded-2xl p-6 text-white custom-scrollbar outline-none focus:border-blue-500"></textarea><button type="submit" disabled={loading||!rawText||isExtracting} className="self-end bg-blue-600 hover:bg-blue-500 text-white px-10 min-h-[64px] py-4 rounded-2xl font-bold disabled:opacity-50 transition-colors">{loading?'Memproses...':'Eksekusi Parafrase'}</button></form>
           </div>
-          {refinedText && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 max-h-[70vh] overflow-y-auto custom-scrollbar"><div className="flex justify-between items-center mb-6"><h3 className="text-xl font-bold text-white">Hasil Parafrase</h3><button onClick={()=>copyToClipboard(refinedText,()=>onError("Teks disalin!","success"))} className="p-3 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-full transition-colors"><Icons.Copy className="w-5 h-5"/></button></div><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html:parseMarkdownToHTML(refinedText)}}/></div>)}
+          {refinedText && (
+             <div className={`bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] flex flex-col transition-all ${isExpanded ? 'min-h-[50vh]' : 'max-h-[85vh] overflow-hidden'}`}>
+               <div className="shrink-0 p-6 border-b border-blue-500/20 flex justify-between items-center">
+                  <h3 className="text-xl font-bold text-white">Hasil Parafrase</h3>
+                  <div className="flex space-x-2">
+                     <button onClick={() => setIsExpanded(!isExpanded)} className="p-3 bg-blue-500/10 text-blue-400 rounded-full hover:bg-blue-500/20 transition-colors">{isExpanded ? <Icons.Collapse className="w-5 h-5"/> : <Icons.Expand className="w-5 h-5"/>}</button>
+                     <button onClick={()=>copyToClipboard(refinedText,()=>onError("Teks disalin!","success"))} className="p-3 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-full transition-colors"><Icons.Copy className="w-5 h-5"/></button>
+                  </div>
+               </div>
+               <div className={`p-6 sm:p-10 ${isExpanded ? '' : 'overflow-y-auto custom-scrollbar'}`}>
+                  <div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html:parseMarkdownToHTML(refinedText)}}/>
+               </div>
+             </div>
+          )}
         </div>
       );
     }
 
     // --- MAIN APP ---
     function NexusApp() {
-      const [activeTab, setActiveTab] = useState('ai'); 
+      const [activeTab, setActiveTab] = useState('scanner'); 
       const [toast, setToast] = useState({ visible: false, message: '', type: 'error' });
       const [isSettingsOpen, setIsSettingsOpen] = useState(false);
       const triggerToast = (m, t = 'error') => setToast({ visible: true, message: m, type: t });
