@@ -116,13 +116,19 @@
       const localKey = safeStorage.get('nexus_api_key');
       const modelsToTry = localKey.trim() === "" ? [ { name: "gemini-2.5-flash-preview-09-2025", useSearch: true } ] : [ { name: "gemini-2.5-flash", useSearch: true }, { name: "gemini-1.5-flash", useSearch: false } ];
       let lastError = null;
+      
+      // INJEKSI KESADARAN TEMPORAL (MENGATASI HALUSINASI TAHUN 2024)
+      const dateContext = new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+      const temporalInstruction = `[SISTEM WAKTU AKTIF: Hari ini adalah ${dateContext}. Jadikan ini sebagai acuan absolut untuk mengkalkulasi waktu, usia, maupun merespons dokumen. DILARANG KERAS berasumsi ini tahun 2023 atau 2024.]\n\n`;
+      const fullSystemPrompt = temporalInstruction + systemPrompt;
+
       const safeContext = customContext ? customContext.substring(0, 30000) : ""; 
       const finalPrompt = customContext ? `[KONTEKS LOKAL]:\n${safeContext}\n\n[INSTRUKSI/PERTANYAAN]:\n${prompt}` : prompt;
 
       for (const config of modelsToTry) {
          try {
              const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.name}:generateContent?key=${localKey}`;
-             const payload = { contents: [{ parts: [{ text: finalPrompt }] }], systemInstruction: { parts: [{ text: systemPrompt }] }, generationConfig: { temperature: 0.3 } };
+             const payload = { contents: [{ parts: [{ text: finalPrompt }] }], systemInstruction: { parts: [{ text: fullSystemPrompt }] }, generationConfig: { temperature: 0.3 } };
              if (config.useSearch && !customContext) payload.tools = [{ google_search: {} }];
              const res = await fetchWithBackoff(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
              const data = await res.json();
@@ -260,14 +266,14 @@
           {!data && (
             <div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-10 flex flex-col items-center">
               <Icons.Database className="w-16 h-16 text-blue-400 mb-6" /><h3 className="text-2xl font-bold text-white mb-6">Injeksi CSV/Excel Data</h3>
-              <label className="w-full max-w-md bg-blue-600 hover:bg-blue-500 text-white h-16 rounded-2xl flex justify-center items-center font-bold cursor-pointer transition-colors">Unggah File CSV <input type="file" accept=".csv,.txt" onChange={handleFile} className="hidden" /></label>
+              <label className="w-full max-w-md bg-blue-600 hover:bg-blue-500 text-white h-[64px] rounded-2xl flex justify-center items-center font-bold cursor-pointer transition-colors">Unggah File CSV <input type="file" accept=".csv,.txt" onChange={handleFile} className="hidden" /></label>
             </div>
           )}
           {data && (
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-              <div className="xl:col-span-1 space-y-6"><div className="bg-[#0a1526]/90 border border-blue-500/20 rounded-[2.5rem] p-8"><CustomSelect label="Pilih Variabel" options={data.numericColumns.map(c=>({value:c,label:c}))} value={selectedCol} onChange={setSelectedCol} /><button onClick={()=>setData(null)} className="mt-6 w-full py-4 bg-red-500/10 text-red-400 rounded-2xl font-bold hover:bg-red-500/20">Tutup Data</button></div></div>
+              <div className="xl:col-span-1 space-y-6"><div className="bg-[#0a1526]/90 border border-blue-500/20 rounded-[2.5rem] p-8"><CustomSelect label="Pilih Variabel" options={data.numericColumns.map(c=>({value:c,label:c}))} value={selectedCol} onChange={setSelectedCol} /><button onClick={()=>setData(null)} className="mt-6 w-full min-h-[64px] py-4 bg-red-500/10 text-red-400 rounded-[2rem] font-bold hover:bg-red-500/20 flex justify-center items-center">Tutup Data</button></div></div>
               <div className="xl:col-span-2 space-y-8">
-                {stats && (<div className="bg-[#0a1526] border border-blue-500/20 rounded-[2.5rem] p-8"><div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-bold text-white">Metrik Tendensi</h3><button onClick={runAI} disabled={loading} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-3 rounded-2xl font-bold">{loading?'Sintesis...':'Tanya AI'}</button></div><div className="grid grid-cols-2 sm:grid-cols-4 gap-4"><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">N (SAMPEL)</p><p className="text-2xl font-bold text-white">{stats.n}</p></div><div className="bg-blue-600 p-4 rounded-xl"><p className="text-xs text-blue-200">MEAN</p><p className="text-2xl font-bold text-white">{stats.mean}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">MEDIAN</p><p className="text-2xl font-bold text-white">{stats.median}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">STD DEV</p><p className="text-2xl font-bold text-white">{stats.stdDev}</p></div></div></div>)}
+                {stats && (<div className="bg-[#0a1526] border border-blue-500/20 rounded-[2.5rem] p-8"><div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-bold text-white">Metrik Tendensi</h3><button onClick={runAI} disabled={loading} className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-[2rem] font-bold min-h-[64px] flex items-center justify-center disabled:opacity-50">{loading?'Sintesis...':'Tanya AI'}</button></div><div className="grid grid-cols-2 sm:grid-cols-4 gap-4"><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">N (SAMPEL)</p><p className="text-2xl font-bold text-white">{stats.n}</p></div><div className="bg-blue-600 p-4 rounded-xl"><p className="text-xs text-blue-200">MEAN</p><p className="text-2xl font-bold text-white">{stats.mean}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">MEDIAN</p><p className="text-2xl font-bold text-white">{stats.median}</p></div><div className="bg-blue-500/10 p-4 rounded-xl"><p className="text-xs text-blue-300">STD DEV</p><p className="text-2xl font-bold text-white">{stats.stdDev}</p></div></div></div>)}
                 {aiResp && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 max-h-[70vh] overflow-y-auto custom-scrollbar"><div className="flex justify-between items-center mb-6"><span className="bg-blue-600 text-white px-4 py-1.5 rounded-full text-xs font-bold uppercase">Sintesis AI</span><button onClick={()=>setAiResp(null)} className="text-red-400"><Icons.Trash className="w-5 h-5"/></button></div><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html: parseMarkdownToHTML(aiResp.text)}}/></div>)}
               </div>
             </div>
@@ -276,7 +282,7 @@
       );
     }
 
-    // --- MODUL 4: DOCUMENT SCANNER (DENGAN MODE PROFESOR PENGUJI) ---
+    // --- MODUL 4: DOCUMENT SCANNER ---
     function DocumentScannerModule({ onError, onOpenSettings }) {
       const [fileState, setFileState] = useState(null); const [extractedText, setExtractedText] = useState([]); 
       const [searchQuery, setSearchQuery] = useState(''); const [aiAnswer, setAiAnswer] = useState(''); 
@@ -286,7 +292,7 @@
       const generateKeywords = async (fullText) => {
          setIsMining(true);
          try {
-             const sys = `TUGAS: Ekstrak persis 4 frasa kata kunci (Hot Topics) utama dari dokumen ini. Pisahkan HANYA dengan tanda koma. DILARANG menggunakan penomoran atau simbol. Contoh: Analisis Risiko, Kebijakan Fiskal, Dampak Inflasi, Saham Syariah`;
+             const sys = `TUGAS: Ekstrak persis 4 frasa kata kunci utama dari dokumen ini. Pisahkan HANYA dengan tanda koma.`;
              const res = await executeAIEngine("Ekstrak kata kunci", sys, fullText.substring(0, 15000));
              const keys = res.text.split(',').map(k => k.trim().replace(/[^a-zA-Z0-9 -]/g, '')).filter(k => k.length > 3);
              setSuggestions(keys);
@@ -314,32 +320,15 @@
         catch(err) { (err.status===401||err.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : setAiAnswer(err.message); } finally { setLoading(false); }
       };
 
-      // --- ALGORITMA BARU: MODE PROFESOR PENGUJI ---
       const runExaminerMode = async () => {
         if(extractedText.length === 0) return;
         setLoading(true); setAiAnswer('');
         try { 
           const ctx = extractedText.slice(0, 15).map(p=>`[Hal ${p.page}]: ${p.text}`).join('\n'); 
-          const sys = `Anda adalah Profesor Penguji Sidang Akademik Senior.
-TUGAS MUTLAK (DILARANG MENGGUNAKAN GAYA BAHASA AI ATAU BASA-BASI):
-Berdasarkan dokumen yang diberikan, lakukan pembedahan analitis dengan format Markdown berikut:
-
-### 1. Evaluasi Komprehensif Naskah
-- **Kelebihan Substansi:** (Analisis tajam mengenai keunggulan metodologi, data, atau argumen di dalam dokumen)
-- **Kelemahan & Celah Riset (Research Gap):** (Kritik tajam mengenai asumsi yang lemah, bias, kekurangan bukti empiris, atau kesalahan logika di dalam dokumen)
-
-### 2. Simulasi Pertanyaan Sidang & Pertahanan
-(Buat 3 pertanyaan tingkat tinggi (HOTS) yang biasa diajukan penguji untuk menyerang naskah ini, disertai jawaban pertahanan akademis yang paling logis berdasarkan dokumen atau literatur yang relevan)
-
-- **Pertanyaan Penguji 1:** [Pertanyaan tajam menyasar kelemahan/asumsi]
-- **Pertahanan Akademis:** [Jawaban taktis, logis, dan berbasis literatur]
-
-- **Pertanyaan Penguji 2:** [Pertanyaan tajam terkait metodologi/implikasi]
-- **Pertahanan Akademis:** [Jawaban defensif yang terstruktur]
-
-- **Pertanyaan Penguji 3:** [Pertanyaan validasi data/kesimpulan]
-- **Pertahanan Akademis:** [Jawaban konklusif]`;
-          
+          const sys = `Anda Profesor Penguji Sidang Akademik. TUGAS MUTLAK:
+1. Evaluasi Komprehensif Naskah (Kelebihan & Celah Riset).
+2. Simulasi 3 Pertanyaan Sidang tingkat tinggi & Pertahanan Akademisnya.
+Gunakan format Markdown murni. DILARANG menggunakan gaya bahasa AI.`;
           setAiAnswer((await executeAIEngine("Lakukan Uji Kritis Akademik pada dokumen ini.", sys, ctx)).text); 
         }
         catch(err) { (err.status===401||err.status===403) ? (onError("API Key Ditolak","error"), onOpenSettings()) : setAiAnswer(err.message); } finally { setLoading(false); }
@@ -347,7 +336,7 @@ Berdasarkan dokumen yang diberikan, lakukan pembedahan analitis dengan format Ma
 
       return (
         <div className="w-full">
-          {fileState === null && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-10 flex flex-col items-center"><Icons.DocumentSearch className="w-16 h-16 text-blue-400 mb-6" /><h3 className="text-2xl font-bold text-white mb-6">Pemindai Naskah (PDF/DOCX)</h3><label className="w-full max-w-md bg-blue-600 hover:bg-blue-500 text-white h-[64px] rounded-[2rem] flex justify-center items-center font-bold cursor-pointer transition-colors">Pilih Dokumen<input type="file" onChange={handleFile} className="hidden" /></label></div>)}
+          {fileState === null && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-10 flex flex-col items-center"><Icons.DocumentSearch className="w-16 h-16 text-blue-400 mb-6" /><h3 className="text-2xl font-bold text-white mb-6">Pemindai Naskah (PDF/DOCX)</h3><label className="w-full max-w-md bg-blue-600 hover:bg-blue-500 text-white min-h-[64px] py-4 rounded-[2rem] flex justify-center items-center font-bold cursor-pointer transition-colors">Pilih Dokumen<input type="file" onChange={handleFile} className="hidden" /></label></div>)}
           {fileState === 'loading' && <div className="py-24 text-center"><div className="w-12 h-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div><p className="text-blue-400">Mengekstrak ke Memori...</p></div>}
           {fileState === 'loaded' && (
             <div className="space-y-8">
@@ -369,13 +358,15 @@ Berdasarkan dokumen yang diberikan, lakukan pembedahan analitis dengan format Ma
                 </div>
 
                 <form onSubmit={runSearch} className="flex flex-col gap-4">
-                  <input type="text" value={searchQuery} onChange={(e)=>setSearchQuery(e.target.value)} placeholder="Tanya AI tentang isi dokumen ini secara manual..." className="w-full h-[64px] bg-[#050a14]/80 border border-white/10 rounded-[2rem] px-6 text-white text-lg outline-none focus:border-blue-500" />
+                  <input type="text" value={searchQuery} onChange={(e)=>setSearchQuery(e.target.value)} placeholder="Tanya AI tentang isi dokumen ini secara manual..." className="w-full min-h-[64px] py-4 bg-[#050a14]/80 border border-white/10 rounded-[2rem] px-6 text-white text-lg outline-none focus:border-blue-500 shadow-inner" />
                   
-                  {/* UPDATE: GRID TOMBOL DENGAN MODE PENGUJI */}
-                  <div className="flex flex-col sm:flex-row gap-4">
-                    <button type="submit" disabled={!searchQuery||loading} className="flex-1 bg-blue-600 hover:bg-blue-500 h-[64px] rounded-[2rem] font-bold text-white transition-colors disabled:opacity-50">Tanya AI</button>
-                    <button type="button" onClick={runExaminerMode} disabled={loading} className="flex-1 bg-red-900/20 hover:bg-red-900/40 border border-red-500/30 h-[64px] rounded-[2rem] font-bold text-red-300 transition-colors disabled:opacity-50 flex items-center justify-center">
-                       <Icons.Target className="w-5 h-5 mr-2" /> Uji Kritis (Mode Penguji)
+                  {/* FIX: FORCED MIN HEIGHT DAN PADDING UNTUK MENCEGAH GEPENG DI MOBILE */}
+                  <div className="flex flex-col sm:flex-row gap-4 mt-2">
+                    <button type="submit" disabled={!searchQuery||loading} className="flex-1 min-h-[64px] py-4 px-6 bg-blue-600 hover:bg-blue-500 rounded-[2rem] font-bold text-white transition-colors disabled:opacity-50 flex items-center justify-center shadow-lg text-center">
+                      Tanya AI
+                    </button>
+                    <button type="button" onClick={runExaminerMode} disabled={loading} className="flex-1 min-h-[64px] py-4 px-6 bg-red-900/20 hover:bg-red-900/40 border border-red-500/30 rounded-[2rem] font-bold text-red-300 transition-colors disabled:opacity-50 flex items-center justify-center shadow-lg text-center">
+                       <Icons.Target className="w-5 h-5 mr-2 shrink-0" /> Uji Kritis (Mode Penguji)
                     </button>
                   </div>
                 </form>
@@ -419,14 +410,14 @@ Berdasarkan dokumen yang diberikan, lakukan pembedahan analitis dengan format Ma
             <h3 className="text-2xl font-bold text-white mb-2">Laboratorium Diksi (PDF)</h3>
             <p className="text-sm text-slate-400 mb-6">Unggah PDF. AI akan membuang Daftar Pustaka/Isi otomatis lalu memparafrase isinya untuk lolos Turnitin.</p>
             <div className="mb-6"><label className="bg-blue-600/20 text-blue-300 border border-blue-500/30 px-6 py-3 rounded-2xl text-sm font-bold cursor-pointer inline-flex items-center hover:bg-blue-600/40"><Icons.Upload className="w-5 h-5 mr-2" />{isExtracting ? 'Mengekstrak AI...' : 'Unggah PDF/DOCX'}<input type="file" accept=".pdf,.docx,.txt" onChange={handleFileUpload} className="hidden" disabled={isExtracting} /></label></div>
-            <form onSubmit={runRefiner} className="flex flex-col gap-5"><textarea value={rawText} onChange={(e)=>setRawText(e.target.value)} placeholder="Atau paste draf skripsi langsung..." className="w-full min-h-[250px] bg-[#050a14]/80 border border-white/10 rounded-2xl p-6 text-white custom-scrollbar outline-none focus:border-blue-500"></textarea><button type="submit" disabled={loading||!rawText||isExtracting} className="self-end bg-blue-600 hover:bg-blue-500 text-white px-10 h-14 rounded-2xl font-bold disabled:opacity-50 transition-colors">{loading?'Memproses...':'Eksekusi Parafrase'}</button></form>
+            <form onSubmit={runRefiner} className="flex flex-col gap-5"><textarea value={rawText} onChange={(e)=>setRawText(e.target.value)} placeholder="Atau paste draf skripsi langsung..." className="w-full min-h-[250px] bg-[#050a14]/80 border border-white/10 rounded-2xl p-6 text-white custom-scrollbar outline-none focus:border-blue-500"></textarea><button type="submit" disabled={loading||!rawText||isExtracting} className="self-end bg-blue-600 hover:bg-blue-500 text-white px-10 min-h-[64px] py-4 rounded-2xl font-bold disabled:opacity-50 transition-colors">{loading?'Memproses...':'Eksekusi Parafrase'}</button></form>
           </div>
           {refinedText && (<div className="bg-[#0a1526]/80 border border-blue-400/20 rounded-[3rem] p-8 max-h-[70vh] overflow-y-auto custom-scrollbar"><div className="flex justify-between items-center mb-6"><h3 className="text-xl font-bold text-white">Hasil Parafrase</h3><button onClick={()=>copyToClipboard(refinedText,()=>onError("Teks disalin!","success"))} className="p-3 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 rounded-full transition-colors"><Icons.Copy className="w-5 h-5"/></button></div><div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={{__html:parseMarkdownToHTML(refinedText)}}/></div>)}
         </div>
       );
     }
 
-    // --- MAIN APP (State Retention via CSS 'hidden') ---
+    // --- MAIN APP ---
     function NexusApp() {
       const [activeTab, setActiveTab] = useState('scanner'); 
       const [toast, setToast] = useState({ visible: false, message: '', type: 'error' });
